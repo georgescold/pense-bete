@@ -13,4 +13,21 @@ const schema = z.object({
 
 export type AppConfig = z.infer<typeof schema>;
 
-export const config: AppConfig = schema.parse(process.env);
+// Trim whitespace/newlines that Railway/Docker sometimes inject around long secrets
+const cleaned: Record<string, string | undefined> = {};
+for (const key of Object.keys(schema.shape)) {
+  const v = process.env[key];
+  cleaned[key] = typeof v === 'string' ? v.trim() : v;
+}
+
+export const config: AppConfig = schema.parse(cleaned);
+
+// Diagnostic log on boot: confirm injected values are well-formed (no secret leak).
+const sk = config.SUPABASE_SERVICE_ROLE_KEY;
+const dots = (sk.match(/\./g) || []).length;
+// eslint-disable-next-line no-console
+console.log(
+  `[config] SUPABASE_SERVICE_ROLE_KEY len=${sk.length} dots=${dots} prefix=${sk.slice(0, 6)} suffix=${sk.slice(-6)}`,
+);
+// eslint-disable-next-line no-console
+console.log(`[config] SUPABASE_URL=${config.SUPABASE_URL}`);
