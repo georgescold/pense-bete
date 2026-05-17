@@ -15,6 +15,8 @@ export interface ReminderRow {
   raw_input: string;
   is_paused: boolean;
   is_last_day_of_month: boolean;
+  color: number;
+  target_user_id: string | null;
   created_at: string;
 }
 
@@ -29,6 +31,8 @@ export interface NewReminder {
   next_run_at: string;
   raw_input: string;
   is_last_day_of_month: boolean;
+  color: number;
+  target_user_id: string | null;
 }
 
 const TABLE = 'reminders';

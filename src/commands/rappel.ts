@@ -9,7 +9,7 @@ import {
 } from 'discord.js';
 import { z } from 'zod';
 import { logger } from '../logger';
-import { parseFrenchSchedule } from '../scheduler/parser';
+import { parseFrenchSchedule, type ParsedSchedule } from '../scheduler/parser';
 import { computeNextCronRun } from '../scheduler/scheduler';
 import {
   deleteReminder,
@@ -24,6 +24,13 @@ import {
   buildListEmbed,
   buildSuccessEmbed,
 } from '../lib/embeds';
+import {
+  COLORS,
+  COLOR_BY_KEY,
+  DEFAULT_COLOR,
+  PRESETS,
+  PRESET_BY_KEY,
+} from '../lib/presets';
 import type { Command } from './types';
 
 const messageSchema = z.string().trim().min(1).max(500);
@@ -43,12 +50,37 @@ const data = new SlashCommandBuilder()
           .setRequired(true)
           .setMaxLength(500),
       )
+      .addStringOption((o) => {
+        o.setName('quand').setDescription('Quand déclencher le rappel').setRequired(true);
+        for (const p of PRESETS) {
+          o.addChoices({ name: p.label, value: p.key });
+        }
+        return o;
+      })
       .addStringOption((o) =>
         o
-          .setName('quand')
-          .setDescription('Ex: "dans 2h", "demain 9h", "tous les lundis à 8h"')
-          .setRequired(true),
-      ),
+          .setName('quand_personnalise')
+          .setDescription(
+            'Si quand=Personnalisé : ex. "demain 9h", "tous les jeudis à 14h30"',
+          )
+          .setRequired(false),
+      )
+      .addUserOption((o) =>
+        o
+          .setName('destinataire')
+          .setDescription('Qui mentionner (vous-même par défaut)')
+          .setRequired(false),
+      )
+      .addStringOption((o) => {
+        o
+          .setName('couleur')
+          .setDescription('Couleur / catégorie du rappel (bleu par défaut)')
+          .setRequired(false);
+        for (const c of COLORS) {
+          o.addChoices({ name: c.label, value: c.key });
+        }
+        return o;
+      }),
   )
   .addSubcommand((s) => s.setName('liste').setDescription('Lister vos rappels actifs'))
   .addSubcommand((s) =>
@@ -126,7 +158,10 @@ async function handleAjouter(
   ctx: { scheduler: import('../scheduler/scheduler').Scheduler },
 ): Promise<void> {
   const rawText = interaction.options.getString('texte', true);
-  const quand = interaction.options.getString('quand', true);
+  const quandKey = interaction.options.getString('quand', true);
+  const quandPerso = interaction.options.getString('quand_personnalise') ?? '';
+  const destinataire = interaction.options.getUser('destinataire');
+  const couleurKey = interaction.options.getString('couleur') ?? 'bleu';
 
   const textParse = messageSchema.safeParse(rawText);
   if (!textParse.success) {
@@ -135,14 +170,35 @@ async function handleAjouter(
   }
   const texte = textParse.data;
 
-  let parsed;
+  // Résolution de la planification
+  let parsed: ParsedSchedule;
+  let rawInput: string;
   try {
-    parsed = parseFrenchSchedule(quand);
+    if (quandKey === 'custom') {
+      if (!quandPerso.trim()) {
+        await ephemeralError(
+          interaction,
+          'Le champ « quand_personnalise » est requis quand vous choisissez « Personnalisé ».',
+        );
+        return;
+      }
+      parsed = parseFrenchSchedule(quandPerso);
+      rawInput = quandPerso;
+    } else {
+      const preset = PRESET_BY_KEY.get(quandKey);
+      if (!preset) {
+        await ephemeralError(interaction, `Choix inconnu : ${quandKey}`);
+        return;
+      }
+      parsed = preset.build(new Date());
+      rawInput = preset.label;
+    }
   } catch (err) {
     await ephemeralError(interaction, err instanceof Error ? err.message : 'Parse error');
     return;
   }
 
+  const color = COLOR_BY_KEY.get(couleurKey)?.value ?? DEFAULT_COLOR;
   const nextRunAt =
     parsed.type === 'once' ? parsed.runAt : computeNextCronRun(parsed.cron, new Date());
 
@@ -155,8 +211,10 @@ async function handleAjouter(
     cron_expression: parsed.type === 'recurring' ? parsed.cron : null,
     run_at: parsed.type === 'once' ? parsed.runAt.toISOString() : null,
     next_run_at: nextRunAt.toISOString(),
-    raw_input: quand,
+    raw_input: rawInput,
     is_last_day_of_month: parsed.type === 'recurring' && parsed.isLastDayOfMonth === true,
+    color,
+    target_user_id: destinataire?.id ?? null,
   });
 
   ctx.scheduler.schedule(inserted);
@@ -170,14 +228,6 @@ const PAGE_SIZE = 10;
 
 async function handleListe(interaction: ChatInputCommandInteraction): Promise<void> {
   const rows = await listRemindersByUser(interaction.user.id);
-  if (rows.length === 0) {
-    await interaction.reply({
-      embeds: [buildListEmbed([], 0, PAGE_SIZE)],
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
   if (rows.length <= PAGE_SIZE) {
     await interaction.reply({
       embeds: [buildListEmbed(rows, 0, PAGE_SIZE)],

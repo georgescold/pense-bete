@@ -9,8 +9,8 @@ export const YELLOW = 0xfee75c;
 
 export function buildAddedEmbed(r: ReminderRow, humanReadable: string): EmbedBuilder {
   const typeIcon = r.schedule_type === 'recurring' ? '🔁' : '📅';
-  return new EmbedBuilder()
-    .setColor(BLURPLE)
+  const embed = new EmbedBuilder()
+    .setColor(r.color)
     .setTitle(`${typeIcon} Rappel enregistré`)
     .addFields(
       { name: 'ID', value: `\`${r.id}\``, inline: true },
@@ -19,11 +19,17 @@ export function buildAddedEmbed(r: ReminderRow, humanReadable: string): EmbedBui
         value: r.schedule_type === 'recurring' ? 'Récurrent' : 'Ponctuel',
         inline: true,
       },
+      {
+        name: 'Destinataire',
+        value: `<@${r.target_user_id ?? r.user_id}>`,
+        inline: true,
+      },
       { name: 'Prochain déclenchement', value: formatFrenchDate(new Date(r.next_run_at)) },
-      { name: 'Expression interprétée', value: humanReadable },
+      { name: 'Planification', value: humanReadable },
       { name: 'Message', value: truncate(r.message, 1000) },
     )
     .setTimestamp();
+  return embed;
 }
 
 export function buildListEmbed(
@@ -58,7 +64,7 @@ export function buildListEmbed(
 
 export function buildReminderEmbed(r: ReminderRow): EmbedBuilder {
   return new EmbedBuilder()
-    .setColor(BLURPLE)
+    .setColor(r.color)
     .setTitle('🔔 Rappel')
     .setDescription(r.message)
     .setFooter({ text: `ID: ${r.id}` })

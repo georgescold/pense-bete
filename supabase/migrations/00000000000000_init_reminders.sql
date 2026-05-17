@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS reminders (
   raw_input TEXT NOT NULL,
   is_paused BOOLEAN NOT NULL DEFAULT FALSE,
   is_last_day_of_month BOOLEAN NOT NULL DEFAULT FALSE,
+  color INTEGER NOT NULL DEFAULT 5793266,
+  target_user_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

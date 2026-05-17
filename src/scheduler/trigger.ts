@@ -75,11 +75,12 @@ export async function fireReminder(
             .setStyle(ButtonStyle.Secondary),
     );
 
+    const mentionId = reminder.target_user_id ?? reminder.user_id;
     await channel.send({
-      content: `<@${reminder.user_id}>`,
+      content: `<@${mentionId}>`,
       embeds: [buildReminderEmbed(reminder)],
       components: [row],
-      allowedMentions: { users: [reminder.user_id] },
+      allowedMentions: { users: [mentionId] },
     });
     logger.info({ id }, 'fired reminder');
   } catch (err) {
