@@ -28,7 +28,7 @@ Bot Discord personnel de rappels (pense-bête), avec rappels ponctuels et récur
    - **service_role key** (⚠️ pas l'anon/publishable key) → `SUPABASE_SERVICE_ROLE_KEY`
 4. (Optionnel) Régénérer les types : `npx supabase gen types typescript --project-id <ref> --schema public > src/db/types.gen.ts`.
 
-> Pour ce projet : URL = `https://vfbxdgyyqcsvpjgzwsus.supabase.co`. Récupérer la service_role key dans le dashboard.
+> Pour ce projet, projet Supabase "Pense bête" : URL = `https://cfmhhqgttjyfitiweslh.supabase.co`. La service_role key est dans le dashboard (Settings → API).
 
 ## Dev local
 

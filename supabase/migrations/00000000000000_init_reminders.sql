@@ -1,5 +1,5 @@
 -- Schema for the pense-bête Discord reminder bot
--- Applied on Supabase project vfbxdgyyqcsvpjgzwsus on 2026-05-17
+-- Applied on Supabase project "Pense bête" (ref: cfmhhqgttjyfitiweslh) on 2026-05-17
 
 CREATE TABLE IF NOT EXISTS reminders (
   id BIGSERIAL PRIMARY KEY,
