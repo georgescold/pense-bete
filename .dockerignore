@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+.env.*
+*.md
+.git
+.gitignore
+coverage
+.vscode
+.idea
+**/*.test.ts
+vitest.config.ts
+.eslintrc.json
+.prettierrc
