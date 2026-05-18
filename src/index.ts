@@ -116,7 +116,9 @@ async function main(): Promise<void> {
       if (!Number.isFinite(id)) return;
 
       const r = await getReminderById(id);
-      if (!r || r.user_id !== interaction.user.id) {
+      const allowed =
+        r && (r.user_id === interaction.user.id || r.target_user_id === interaction.user.id);
+      if (!r || !allowed) {
         await interaction.reply({
           content: 'Ce rappel ne vous appartient pas.',
           flags: MessageFlags.Ephemeral,
