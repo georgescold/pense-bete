@@ -7,82 +7,43 @@ import {
   MessageFlags,
   SlashCommandBuilder,
 } from 'discord.js';
-import { z } from 'zod';
 import { logger } from '../logger';
-import { parseFrenchSchedule, type ParsedSchedule } from '../scheduler/parser';
-import { computeNextCronRun } from '../scheduler/scheduler';
 import {
   deleteReminder,
   getReminderById,
-  insertReminder,
   listRemindersByUser,
   setPaused,
 } from '../db/repository';
 import {
-  buildAddedEmbed,
+  buildCalendarEmbed,
   buildErrorEmbed,
   buildListEmbed,
   buildSuccessEmbed,
 } from '../lib/embeds';
-import {
-  COLORS,
-  COLOR_BY_KEY,
-  DEFAULT_COLOR,
-  PRESETS,
-  PRESET_BY_KEY,
-} from '../lib/presets';
+import { startWizard } from './wizard';
 import type { Command } from './types';
-
-const messageSchema = z.string().trim().min(1).max(500);
 
 const data = new SlashCommandBuilder()
   .setName('rappel')
   .setDescription('Gérer vos rappels (pense-bête)')
   .setDMPermission(true)
   .addSubcommand((s) =>
-    s
-      .setName('ajouter')
-      .setDescription('Ajouter un nouveau rappel')
-      .addStringOption((o) =>
-        o
-          .setName('texte')
-          .setDescription('Contenu du rappel (max 500 caractères)')
-          .setRequired(true)
-          .setMaxLength(500),
-      )
-      .addStringOption((o) => {
-        o.setName('quand').setDescription('Quand déclencher le rappel').setRequired(true);
-        for (const p of PRESETS) {
-          o.addChoices({ name: p.label, value: p.key });
-        }
-        return o;
-      })
-      .addStringOption((o) =>
-        o
-          .setName('quand_personnalise')
-          .setDescription(
-            'Si quand=Personnalisé : ex. "demain 9h", "tous les jeudis à 14h30"',
-          )
-          .setRequired(false),
-      )
-      .addUserOption((o) =>
-        o
-          .setName('destinataire')
-          .setDescription('Qui mentionner (vous-même par défaut)')
-          .setRequired(false),
-      )
-      .addStringOption((o) => {
-        o
-          .setName('couleur')
-          .setDescription('Couleur / catégorie du rappel (bleu par défaut)')
-          .setRequired(false);
-        for (const c of COLORS) {
-          o.addChoices({ name: c.label, value: c.key });
-        }
-        return o;
-      }),
+    s.setName('ajouter').setDescription('Ouvrir le formulaire pour créer un rappel'),
   )
   .addSubcommand((s) => s.setName('liste').setDescription('Lister vos rappels actifs'))
+  .addSubcommand((s) =>
+    s
+      .setName('calendrier')
+      .setDescription('Vue calendrier des rappels à venir')
+      .addIntegerOption((o) =>
+        o
+          .setName('jours')
+          .setDescription('Nombre de jours à afficher (1-60, défaut 30)')
+          .setRequired(false)
+          .setMinValue(1)
+          .setMaxValue(60),
+      ),
+  )
   .addSubcommand((s) =>
     s
       .setName('supprimer')
@@ -128,10 +89,13 @@ export const rappelCommand: Command = {
     try {
       switch (sub) {
         case 'ajouter':
-          await handleAjouter(interaction, ctx);
+          await startWizard(interaction);
           break;
         case 'liste':
           await handleListe(interaction);
+          break;
+        case 'calendrier':
+          await handleCalendrier(interaction);
           break;
         case 'supprimer':
           await handleSupprimer(interaction, ctx);
@@ -152,77 +116,6 @@ export const rappelCommand: Command = {
     }
   },
 };
-
-async function handleAjouter(
-  interaction: ChatInputCommandInteraction,
-  ctx: { scheduler: import('../scheduler/scheduler').Scheduler },
-): Promise<void> {
-  const rawText = interaction.options.getString('texte', true);
-  const quandKey = interaction.options.getString('quand', true);
-  const quandPerso = interaction.options.getString('quand_personnalise') ?? '';
-  const destinataire = interaction.options.getUser('destinataire');
-  const couleurKey = interaction.options.getString('couleur') ?? 'bleu';
-
-  const textParse = messageSchema.safeParse(rawText);
-  if (!textParse.success) {
-    await ephemeralError(interaction, 'Texte invalide (vide ou > 500 caractères).');
-    return;
-  }
-  const texte = textParse.data;
-
-  // Résolution de la planification
-  let parsed: ParsedSchedule;
-  let rawInput: string;
-  try {
-    if (quandKey === 'custom') {
-      if (!quandPerso.trim()) {
-        await ephemeralError(
-          interaction,
-          'Le champ « quand_personnalise » est requis quand vous choisissez « Personnalisé ».',
-        );
-        return;
-      }
-      parsed = parseFrenchSchedule(quandPerso);
-      rawInput = quandPerso;
-    } else {
-      const preset = PRESET_BY_KEY.get(quandKey);
-      if (!preset) {
-        await ephemeralError(interaction, `Choix inconnu : ${quandKey}`);
-        return;
-      }
-      parsed = preset.build(new Date());
-      rawInput = preset.label;
-    }
-  } catch (err) {
-    await ephemeralError(interaction, err instanceof Error ? err.message : 'Parse error');
-    return;
-  }
-
-  const color = COLOR_BY_KEY.get(couleurKey)?.value ?? DEFAULT_COLOR;
-  const nextRunAt =
-    parsed.type === 'once' ? parsed.runAt : computeNextCronRun(parsed.cron, new Date());
-
-  const inserted = await insertReminder({
-    user_id: interaction.user.id,
-    channel_id: interaction.channelId,
-    guild_id: interaction.guildId,
-    message: texte,
-    schedule_type: parsed.type,
-    cron_expression: parsed.type === 'recurring' ? parsed.cron : null,
-    run_at: parsed.type === 'once' ? parsed.runAt.toISOString() : null,
-    next_run_at: nextRunAt.toISOString(),
-    raw_input: rawInput,
-    is_last_day_of_month: parsed.type === 'recurring' && parsed.isLastDayOfMonth === true,
-    color,
-    target_user_id: destinataire?.id ?? null,
-  });
-
-  ctx.scheduler.schedule(inserted);
-
-  await interaction.reply({
-    embeds: [buildAddedEmbed(inserted, parsed.humanReadable)],
-  });
-}
 
 const PAGE_SIZE = 10;
 
@@ -281,6 +174,15 @@ async function handleListe(interaction: ChatInputCommandInteraction): Promise<vo
     } catch {
       /* ignore */
     }
+  });
+}
+
+async function handleCalendrier(interaction: ChatInputCommandInteraction): Promise<void> {
+  const days = interaction.options.getInteger('jours') ?? 30;
+  const rows = await listRemindersByUser(interaction.user.id);
+  await interaction.reply({
+    embeds: [buildCalendarEmbed(rows, days)],
+    flags: MessageFlags.Ephemeral,
   });
 }
 

@@ -8,6 +8,7 @@ import {
 import { config } from './config';
 import { logger } from './logger';
 import { commandMap } from './commands';
+import { handleWizardInteraction, isWizardInteraction } from './commands/wizard';
 import { Scheduler } from './scheduler/scheduler';
 import {
   deleteReminder,
@@ -19,7 +20,11 @@ import { computeNextCronRun } from './scheduler/scheduler';
 
 async function main(): Promise<void> {
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.DirectMessages,
+    ],
   });
 
   const scheduler = new Scheduler(client);
@@ -74,6 +79,31 @@ async function main(): Promise<void> {
           await interaction.followUp(payload).catch(() => undefined);
         } else {
           await interaction.reply(payload).catch(() => undefined);
+        }
+      }
+      return;
+    }
+
+    if (
+      (interaction.isStringSelectMenu() ||
+        interaction.isUserSelectMenu() ||
+        interaction.isModalSubmit() ||
+        interaction.isButton()) &&
+      isWizardInteraction(interaction.customId)
+    ) {
+      try {
+        await handleWizardInteraction(interaction, scheduler);
+      } catch (err) {
+        logger.error({ err, customId: interaction.customId }, 'wizard interaction failed');
+        const msg = err instanceof Error ? err.message : 'Erreur inconnue';
+        try {
+          if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          } else if (interaction.isRepliable()) {
+            await interaction.followUp({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          }
+        } catch {
+          /* ignore */
         }
       }
       return;
