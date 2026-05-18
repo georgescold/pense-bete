@@ -116,6 +116,36 @@ async function main(): Promise<void> {
       if (!Number.isFinite(id)) return;
 
       const r = await getReminderById(id);
+
+      if (action === 'done') {
+        // Les rappels ponctuels sont supprimés de la DB dès l'envoi (cf. fireReminder),
+        // donc r peut être null ici — c'est attendu. On vérifie l'ownership uniquement
+        // si le rappel existe encore.
+        if (r) {
+          const allowed =
+            r.user_id === interaction.user.id || r.target_user_id === interaction.user.id;
+          if (!allowed) {
+            await interaction.reply({
+              content: 'Ce rappel ne vous appartient pas.',
+              flags: MessageFlags.Ephemeral,
+            });
+            return;
+          }
+          try {
+            await deleteReminder(id);
+          } catch {
+            /* déjà supprimé */
+          }
+          scheduler.unschedule(id);
+        }
+        try {
+          await interaction.message.delete();
+        } catch {
+          await interaction.update({ content: '✅ Marqué comme fait.', embeds: [], components: [] });
+        }
+        return;
+      }
+
       const allowed =
         r && (r.user_id === interaction.user.id || r.target_user_id === interaction.user.id);
       if (!r || !allowed) {
@@ -123,22 +153,6 @@ async function main(): Promise<void> {
           content: 'Ce rappel ne vous appartient pas.',
           flags: MessageFlags.Ephemeral,
         });
-        return;
-      }
-
-      if (action === 'done' && r.schedule_type === 'once') {
-        try {
-          await deleteReminder(id);
-        } catch {
-          /* déjà supprimé */
-        }
-        scheduler.unschedule(id);
-        try {
-          await interaction.message.delete();
-        } catch {
-          // si on ne peut pas supprimer (DM ou pas de perm), on update.
-          await interaction.update({ content: '✅ Marqué comme fait.', embeds: [], components: [] });
-        }
         return;
       }
 
