@@ -384,10 +384,24 @@ async function handleCreateButton(
   scheduler.schedule(inserted);
   STATES.delete(wizardId);
 
+  // Le wizard lui-même est ephemeral (formulaire personnel) → on le ferme
+  // par une confirmation courte, puis on publie le récap publiquement dans le channel.
   await interaction.update({
     embeds: [buildAddedEmbed(inserted, parsed.humanReadable)],
     components: [],
   });
+
+  try {
+    const channel = interaction.channel;
+    if (channel && 'send' in channel && typeof channel.send === 'function') {
+      await channel.send({
+        embeds: [buildAddedEmbed(inserted, parsed.humanReadable)],
+        allowedMentions: { parse: [] },
+      });
+    }
+  } catch (err) {
+    logger.warn({ err }, 'failed to post public reminder recap');
+  }
 }
 
 async function handleTexteModal(interaction: ModalSubmitInteraction, wizardId: string): Promise<void> {

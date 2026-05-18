@@ -30,7 +30,17 @@ const data = new SlashCommandBuilder()
   .addSubcommand((s) =>
     s.setName('ajouter').setDescription('Ouvrir le formulaire pour créer un rappel'),
   )
-  .addSubcommand((s) => s.setName('liste').setDescription('Lister vos rappels actifs'))
+  .addSubcommand((s) =>
+    s
+      .setName('liste')
+      .setDescription('Lister vos rappels actifs')
+      .addBooleanOption((o) =>
+        o
+          .setName('prive')
+          .setDescription('Visible uniquement par vous (défaut: non)')
+          .setRequired(false),
+      ),
+  )
   .addSubcommand((s) =>
     s
       .setName('calendrier')
@@ -42,6 +52,12 @@ const data = new SlashCommandBuilder()
           .setRequired(false)
           .setMinValue(1)
           .setMaxValue(60),
+      )
+      .addBooleanOption((o) =>
+        o
+          .setName('prive')
+          .setDescription('Visible uniquement par vous (défaut: non)')
+          .setRequired(false),
       ),
   )
   .addSubcommand((s) =>
@@ -120,11 +136,12 @@ export const rappelCommand: Command = {
 const PAGE_SIZE = 10;
 
 async function handleListe(interaction: ChatInputCommandInteraction): Promise<void> {
+  const prive = interaction.options.getBoolean('prive') ?? false;
   const rows = await listRemindersByUser(interaction.user.id);
   if (rows.length <= PAGE_SIZE) {
     await interaction.reply({
       embeds: [buildListEmbed(rows, 0, PAGE_SIZE)],
-      flags: MessageFlags.Ephemeral,
+      ...(prive ? { flags: MessageFlags.Ephemeral } : {}),
     });
     return;
   }
@@ -149,7 +166,7 @@ async function handleListe(interaction: ChatInputCommandInteraction): Promise<vo
   const msg = await interaction.reply({
     embeds: [buildListEmbed(rows, page, PAGE_SIZE)],
     components: [makeRow()],
-    flags: MessageFlags.Ephemeral,
+    ...(prive ? { flags: MessageFlags.Ephemeral } : {}),
     withResponse: true,
   });
 
@@ -179,10 +196,11 @@ async function handleListe(interaction: ChatInputCommandInteraction): Promise<vo
 
 async function handleCalendrier(interaction: ChatInputCommandInteraction): Promise<void> {
   const days = interaction.options.getInteger('jours') ?? 30;
+  const prive = interaction.options.getBoolean('prive') ?? false;
   const rows = await listRemindersByUser(interaction.user.id);
   await interaction.reply({
     embeds: [buildCalendarEmbed(rows, days)],
-    flags: MessageFlags.Ephemeral,
+    ...(prive ? { flags: MessageFlags.Ephemeral } : {}),
   });
 }
 
