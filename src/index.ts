@@ -1,5 +1,6 @@
 import {
   Client,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
   Interaction,
@@ -138,11 +139,28 @@ async function main(): Promise<void> {
           }
           scheduler.unschedule(id);
         }
-        try {
-          await interaction.message.delete();
-        } catch {
-          await interaction.update({ content: '✅ Marqué comme fait.', embeds: [], components: [] });
-        }
+
+        const originalEmbed = interaction.message.embeds[0];
+        const reminderText = originalEmbed?.description ?? r?.message ?? '*(rappel)*';
+        const originalColor = originalEmbed?.color ?? r?.color ?? 0x57f287;
+        const validatedAt = Math.floor(Date.now() / 1000);
+
+        const doneEmbed = new EmbedBuilder()
+          .setColor(originalColor)
+          .setTitle('✅ Rappel validé')
+          .setDescription(reminderText)
+          .addFields(
+            { name: 'Validé par', value: `<@${interaction.user.id}>`, inline: true },
+            { name: 'Validé le', value: `<t:${validatedAt}:F>`, inline: true },
+          )
+          .setFooter({ text: `Rappel #${id} · terminé` });
+
+        await interaction.update({
+          content: '',
+          embeds: [doneEmbed],
+          components: [],
+          allowedMentions: { parse: [] },
+        });
         return;
       }
 
