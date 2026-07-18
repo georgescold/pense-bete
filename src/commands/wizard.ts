@@ -23,15 +23,12 @@ import { insertReminder, updateReminder } from '../db/repository';
 import { buildAddedEmbed, buildErrorEmbed } from '../lib/embeds';
 import { pinMessage } from '../lib/pins';
 import { COLORS, COLOR_BY_KEY, DEFAULT_COLOR } from '../lib/presets';
-import {
-  ESCALATION_SUMMARY,
-  currentPeriodValue,
-  selectionToDate,
-} from '../lib/datetime';
+import { ESCALATION_SUMMARY, currentPeriodValue, selectionToDate } from '../lib/datetime';
 import {
   buildDaySelect,
   buildHourSelect,
-  buildMinuteSelect,
+  buildMinuteTensSelect,
+  buildMinuteUnitsSelect,
   buildPeriodSelect,
 } from '../lib/dtpicker';
 import {
@@ -44,31 +41,10 @@ import {
 } from '../lib/recurrence';
 import { formatFrenchDate } from '../lib/format';
 
-// --- Choix rapides "ponctuel" ---------------------------------------------
-
-interface QuickOnce {
-  key: string;
-  label: string;
-  ms: number;
-}
-
-const QUICK_ONCE: QuickOnce[] = [
-  { key: '15min', label: 'Dans 15 minutes', ms: 15 * 60_000 },
-  { key: '30min', label: 'Dans 30 minutes', ms: 30 * 60_000 },
-  { key: '1h', label: 'Dans 1 heure', ms: 3_600_000 },
-  { key: '2h', label: 'Dans 2 heures', ms: 2 * 3_600_000 },
-  { key: '4h', label: 'Dans 4 heures', ms: 4 * 3_600_000 },
-  { key: '8h', label: 'Dans 8 heures', ms: 8 * 3_600_000 },
-  { key: '24h', label: 'Dans 24 heures', ms: 24 * 3_600_000 },
-  { key: '2j', label: 'Dans 2 jours', ms: 2 * 86_400_000 },
-  { key: '1sem', label: 'Dans 1 semaine', ms: 7 * 86_400_000 },
-];
-const QUICK_BY_KEY = new Map(QUICK_ONCE.map((q) => [q.key, q]));
-
 // --- État ------------------------------------------------------------------
 
 type Kind = 'once' | 'recurring';
-type View = 'main' | 'once_when' | 'once_precise' | 'rec_when';
+type View = 'main' | 'once_date' | 'once_time' | 'rec_config' | 'rec_time';
 
 interface WizardState {
   userId: string;
@@ -77,19 +53,21 @@ interface WizardState {
   texte: string | null;
   kind: Kind | null;
   view: View;
-  // Ponctuel
-  onceQuickKey: string | null;
+  // Ponctuel — date
   pickPeriod: string | null;
   pickDate: string | null;
+  // Ponctuel — heure
   pickHour: number | null;
-  pickMin: number | null;
+  pickMinTens: number | null;
+  pickMinUnits: number | null;
   preciseRunAt: Date | null;
   // Récurrent
   recFreq: RecFreq | null;
   recDays: number[];
   recMonthDay: number | null;
   recHour: number | null;
-  recMin: number | null;
+  recMinTens: number | null;
+  recMinUnits: number | null;
   // Commun
   destinataireId: string | null;
   couleurKey: string;
@@ -111,29 +89,40 @@ function newId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
+function minuteOf(tens: number | null, units: number | null): number {
+  return (tens ?? 0) + (units ?? 0);
+}
+
 // --- Résumé / validité -----------------------------------------------------
 
 function recurrenceFromState(state: WizardState): ParsedSchedule | null {
-  if (!state.recFreq || state.recHour === null || state.recMin === null) return null;
+  if (!state.recFreq || state.recHour === null || state.recMinTens === null) return null;
   try {
     return buildRecurrence({
       freq: state.recFreq,
       days: state.recDays,
       monthDay: state.recMonthDay,
       hour: state.recHour,
-      minute: state.recMin,
+      minute: minuteOf(state.recMinTens, state.recMinUnits),
     });
   } catch {
     return null;
   }
 }
 
+function onceRunAt(state: WizardState): Date | null {
+  if (state.preciseRunAt) return state.preciseRunAt;
+  if (state.pickDate && state.pickHour !== null && state.pickMinTens !== null) {
+    return selectionToDate(state.pickDate, state.pickHour, minuteOf(state.pickMinTens, state.pickMinUnits));
+  }
+  return null;
+}
+
 function quandLabel(state: WizardState): string {
   if (!state.kind) return '*choisis d’abord le type*';
   if (state.kind === 'once') {
-    if (state.preciseRunAt) return `📅 ${formatFrenchDate(state.preciseRunAt)}`;
-    if (state.onceQuickKey) return `⏱️ ${QUICK_BY_KEY.get(state.onceQuickKey)?.label ?? state.onceQuickKey}`;
-    return '*à définir — clique sur « Quand »*';
+    const at = onceRunAt(state);
+    return at ? `📅 ${formatFrenchDate(at)}` : '*à définir — clique sur « Quand »*';
   }
   const rec = recurrenceFromState(state);
   if (rec) return `🔁 ${rec.humanReadable}`;
@@ -142,7 +131,7 @@ function quandLabel(state: WizardState): string {
 }
 
 function isQuandComplete(state: WizardState): boolean {
-  if (state.kind === 'once') return !!state.preciseRunAt || !!state.onceQuickKey;
+  if (state.kind === 'once') return !!state.preciseRunAt;
   if (state.kind === 'recurring') return recurrenceFromState(state) !== null;
   return false;
 }
@@ -151,13 +140,19 @@ function couleurLabel(key: string): string {
   return COLOR_BY_KEY.get(key)?.label ?? key;
 }
 
+function timePreview(hour: number | null, tens: number | null, units: number | null): string {
+  if (hour === null || tens === null) return '*Heure incomplète…*';
+  const m = minuteOf(tens, units);
+  return `**${hour.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}**`;
+}
+
 // --- Embeds ----------------------------------------------------------------
 
 function stateColor(state: WizardState): number {
   return COLOR_BY_KEY.get(state.couleurKey)?.value ?? DEFAULT_COLOR;
 }
 
-function buildWizardEmbed(state: WizardState): EmbedBuilder {
+function buildMainEmbed(state: WizardState): EmbedBuilder {
   const typeLabel = !state.kind
     ? '*non défini*'
     : state.kind === 'once'
@@ -166,14 +161,11 @@ function buildWizardEmbed(state: WizardState): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setColor(stateColor(state))
     .setTitle('✏️ Nouveau rappel')
-    .setDescription('Choisis le **type**, le **texte**, puis **Quand**. Tout se fait par menus.')
+    .setDescription('Choisis le **type** — tu passeras ensuite au **jour/date puis à l’heure**.')
     .addFields(
       { name: '🔀 Type', value: typeLabel, inline: true },
       { name: '⏰ Quand', value: quandLabel(state), inline: true },
-      {
-        name: '📝 Texte',
-        value: state.texte ? `> ${state.texte.slice(0, 300)}` : '*non défini*',
-      },
+      { name: '📝 Texte', value: state.texte ? `> ${state.texte.slice(0, 300)}` : '*non défini*' },
       {
         name: '👤 Destinataire',
         value: state.destinataireId ? `<@${state.destinataireId}>` : `<@${state.userId}> *(vous)*`,
@@ -190,56 +182,58 @@ function buildWizardEmbed(state: WizardState): EmbedBuilder {
   return embed;
 }
 
-function buildOnceWhenEmbed(state: WizardState): EmbedBuilder {
+function buildOnceDateEmbed(state: WizardState): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(stateColor(state))
-    .setTitle('⏰ Quand (ponctuel)')
+    .setTitle('📅 Étape 1/2 — Jour')
+    .setDescription('Choisis le **mois** puis le **jour**, puis clique **Suivant** pour l’heure.');
+}
+
+function buildOnceTimeEmbed(state: WizardState): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(stateColor(state))
+    .setTitle('🕐 Étape 2/2 — Heure')
     .setDescription(
-      'Choisis un **délai rapide** dans le menu, ou clique **📅 Date & heure précises** pour choisir une date exacte.',
+      `Jour choisi. Sélectionne l’**heure** et les **minutes** (dizaines + unités), puis **Valider**.\n\n→ ${timePreview(state.pickHour, state.pickMinTens, state.pickMinUnits)}`,
     );
 }
 
-function buildPreciseEmbed(state: WizardState): EmbedBuilder {
-  const preview =
-    state.pickDate && state.pickHour !== null && state.pickMin !== null
-      ? formatFrenchDate(selectionToDate(state.pickDate, state.pickHour, state.pickMin))
-      : null;
+function buildRecConfigEmbed(state: WizardState): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(stateColor(state))
-    .setTitle('📅 Date & heure précises')
+    .setTitle('🔁 Étape 1/2 — Fréquence')
     .setDescription(
-      'Choisis le **mois**, le **jour**, l’**heure**, les **minutes**, puis **Valider**.' +
-        (preview ? `\n\n**→ ${preview}**` : '\n\n*Sélection incomplète…*'),
+      'Choisis la **fréquence**' +
+        (state.recFreq === 'weekly' ? ' et les **jours**' : '') +
+        (state.recFreq === 'monthly' ? ' et le **jour du mois**' : '') +
+        ', puis **Suivant** pour l’heure.',
     );
 }
 
-function buildRecWhenEmbed(state: WizardState): EmbedBuilder {
+function buildRecTimeEmbed(state: WizardState): EmbedBuilder {
   const rec = recurrenceFromState(state);
   return new EmbedBuilder()
     .setColor(stateColor(state))
-    .setTitle('🔁 Quand (récurrent)')
+    .setTitle('🕐 Étape 2/2 — Heure')
     .setDescription(
-      'Choisis la **fréquence**' +
-        (state.recFreq === 'weekly' ? ', les **jours**' : '') +
-        (state.recFreq === 'monthly' ? ', le **jour du mois**' : '') +
-        ', l’**heure** et les **minutes**, puis **Valider**.' +
-        (rec ? `\n\n**→ ${rec.humanReadable}**` : '\n\n*Sélection incomplète…*'),
+      `Sélectionne l’**heure** et les **minutes**, puis **Valider**.\n\n→ ${timePreview(state.recHour, state.recMinTens, state.recMinUnits)}` +
+        (rec ? `\n\n🔁 ${rec.humanReadable}` : ''),
     );
 }
 
-// --- Composants (selects & boutons) ----------------------------------------
+// --- Composants ------------------------------------------------------------
 
 function buildTypeSelect(id: string, state: WizardState): ActionRowBuilder<StringSelectMenuBuilder> {
   const select = new StringSelectMenuBuilder()
     .setCustomId(`wizard:type:${id}`)
-    .setPlaceholder('🔀 Type de rappel : ponctuel ou récurrent ?')
+    .setPlaceholder('🔀 Type : ponctuel ou récurrent ?')
     .addOptions(
       new StringSelectMenuOptionBuilder()
         .setLabel('📅 Ponctuel — une seule fois')
         .setValue('once')
         .setDefault(state.kind === 'once'),
       new StringSelectMenuOptionBuilder()
-        .setLabel('🔁 Récurrent — régulier (tous les jours, chaque semaine…)')
+        .setLabel('🔁 Récurrent — régulier')
         .setValue('recurring')
         .setDefault(state.kind === 'recurring'),
     );
@@ -310,21 +304,6 @@ function buildMainButtons(id: string, state: WizardState): ActionRowBuilder<Butt
   return row;
 }
 
-function buildOnceQuickSelect(id: string, state: WizardState): ActionRowBuilder<StringSelectMenuBuilder> {
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`wizard:oquick:${id}`)
-    .setPlaceholder('⏱️ Délai rapide')
-    .addOptions(
-      QUICK_ONCE.map((q) =>
-        new StringSelectMenuOptionBuilder()
-          .setLabel(q.label)
-          .setValue(q.key)
-          .setDefault(state.onceQuickKey === q.key),
-      ),
-    );
-  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
-}
-
 function buildRecFreqSelect(id: string, state: WizardState): ActionRowBuilder<StringSelectMenuBuilder> {
   const select = new StringSelectMenuBuilder()
     .setCustomId(`wizard:rfreq:${id}`)
@@ -343,7 +322,7 @@ function buildRecFreqSelect(id: string, state: WizardState): ActionRowBuilder<St
 function buildRecDaysSelect(id: string, state: WizardState): ActionRowBuilder<StringSelectMenuBuilder> {
   const select = new StringSelectMenuBuilder()
     .setCustomId(`wizard:rdays:${id}`)
-    .setPlaceholder('📆 Jours de la semaine (un ou plusieurs)')
+    .setPlaceholder('📆 Jours (un ou plusieurs)')
     .setMinValues(1)
     .setMaxValues(WEEKDAYS.length)
     .addOptions(
@@ -372,21 +351,22 @@ function buildRecMonthDaySelect(id: string, state: WizardState): ActionRowBuilde
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
 }
 
-function subButtons(
+function navButtons(
   id: string,
-  validerAction: string,
-  retourAction: string,
-  canValidate: boolean,
+  primaryAction: string,
+  primaryLabel: string,
+  backAction: string,
+  primaryEnabled: boolean,
 ): ActionRowBuilder<ButtonBuilder> {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`wizard:btn:${validerAction}:${id}`)
-      .setLabel('Valider')
-      .setEmoji('✅')
+      .setCustomId(`wizard:btn:${primaryAction}:${id}`)
+      .setLabel(primaryLabel)
+      .setEmoji(primaryLabel === 'Valider' ? '✅' : '➡️')
       .setStyle(ButtonStyle.Success)
-      .setDisabled(!canValidate),
+      .setDisabled(!primaryEnabled),
     new ButtonBuilder()
-      .setCustomId(`wizard:btn:${retourAction}:${id}`)
+      .setCustomId(`wizard:btn:${backAction}:${id}`)
       .setLabel('Retour')
       .setEmoji('↩️')
       .setStyle(ButtonStyle.Secondary),
@@ -396,66 +376,61 @@ function subButtons(
 // --- Payloads --------------------------------------------------------------
 
 function buildPayload(id: string, state: WizardState) {
-  if (state.view === 'once_when') {
-    return {
-      embeds: [buildOnceWhenEmbed(state)],
-      components: [
-        buildOnceQuickSelect(id, state),
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`wizard:btn:oprecise:${id}`)
-            .setLabel('Date & heure précises')
-            .setEmoji('📅')
-            .setStyle(ButtonStyle.Primary),
-        ),
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`wizard:btn:oretour:${id}`)
-            .setLabel('Retour')
-            .setEmoji('↩️')
-            .setStyle(ButtonStyle.Secondary),
-        ),
-      ],
-    };
+  switch (state.view) {
+    case 'once_date':
+      return {
+        embeds: [buildOnceDateEmbed(state)],
+        components: [
+          buildPeriodSelect(`wizard:pperiod:${id}`, state.pickPeriod),
+          buildDaySelect(`wizard:pday:${id}`, state.pickPeriod, state.pickDate),
+          navButtons(id, 'odatenext', 'Suivant', 'odateback', !!state.pickDate),
+        ],
+      };
+    case 'once_time':
+      return {
+        embeds: [buildOnceTimeEmbed(state)],
+        components: [
+          buildHourSelect(`wizard:phour:${id}`, state.pickHour),
+          buildMinuteTensSelect(`wizard:pmintens:${id}`, state.pickMinTens),
+          buildMinuteUnitsSelect(`wizard:pminunits:${id}`, state.pickMinUnits),
+          navButtons(id, 'ovalider', 'Valider', 'otimeback', state.pickHour !== null && state.pickMinTens !== null),
+        ],
+      };
+    case 'rec_config': {
+      const rows: (
+        | ActionRowBuilder<StringSelectMenuBuilder>
+        | ActionRowBuilder<ButtonBuilder>
+      )[] = [buildRecFreqSelect(id, state)];
+      if (state.recFreq === 'weekly') rows.push(buildRecDaysSelect(id, state));
+      else if (state.recFreq === 'monthly') rows.push(buildRecMonthDaySelect(id, state));
+      const depsOk =
+        !!state.recFreq &&
+        (state.recFreq !== 'weekly' || state.recDays.length > 0) &&
+        (state.recFreq !== 'monthly' || state.recMonthDay !== null);
+      rows.push(navButtons(id, 'rconfignext', 'Suivant', 'rconfigback', depsOk));
+      return { embeds: [buildRecConfigEmbed(state)], components: rows };
+    }
+    case 'rec_time':
+      return {
+        embeds: [buildRecTimeEmbed(state)],
+        components: [
+          buildHourSelect(`wizard:rhour:${id}`, state.recHour),
+          buildMinuteTensSelect(`wizard:rmintens:${id}`, state.recMinTens),
+          buildMinuteUnitsSelect(`wizard:rminunits:${id}`, state.recMinUnits),
+          navButtons(id, 'rvalider', 'Valider', 'rtimeback', state.recHour !== null && state.recMinTens !== null),
+        ],
+      };
+    default:
+      return {
+        embeds: [buildMainEmbed(state)],
+        components: [
+          buildTypeSelect(id, state),
+          buildCouleurSelect(id, state),
+          buildDestSelect(id),
+          buildMainButtons(id, state),
+        ],
+      };
   }
-
-  if (state.view === 'once_precise') {
-    const ready = !!state.pickDate && state.pickHour !== null && state.pickMin !== null;
-    return {
-      embeds: [buildPreciseEmbed(state)],
-      components: [
-        buildPeriodSelect(`wizard:pperiod:${id}`, state.pickPeriod),
-        buildDaySelect(`wizard:pday:${id}`, state.pickPeriod, state.pickDate),
-        buildHourSelect(`wizard:phour:${id}`, state.pickHour),
-        buildMinuteSelect(`wizard:pmin:${id}`, state.pickMin),
-        subButtons(id, 'pvalider', 'pretour', ready),
-      ],
-    };
-  }
-
-  if (state.view === 'rec_when') {
-    const rows: (
-      | ActionRowBuilder<StringSelectMenuBuilder>
-      | ActionRowBuilder<ButtonBuilder>
-    )[] = [buildRecFreqSelect(id, state)];
-    if (state.recFreq === 'weekly') rows.push(buildRecDaysSelect(id, state));
-    else if (state.recFreq === 'monthly') rows.push(buildRecMonthDaySelect(id, state));
-    rows.push(buildHourSelect(`wizard:rhour:${id}`, state.recHour));
-    rows.push(buildMinuteSelect(`wizard:rmin:${id}`, state.recMin));
-    rows.push(subButtons(id, 'rvalider', 'rretour', recurrenceFromState(state) !== null));
-    return { embeds: [buildRecWhenEmbed(state)], components: rows };
-  }
-
-  // main
-  return {
-    embeds: [buildWizardEmbed(state)],
-    components: [
-      buildTypeSelect(id, state),
-      buildCouleurSelect(id, state),
-      buildDestSelect(id),
-      buildMainButtons(id, state),
-    ],
-  };
 }
 
 // --- Entrée ----------------------------------------------------------------
@@ -470,17 +445,18 @@ export async function startWizard(interaction: ChatInputCommandInteraction): Pro
     texte: null,
     kind: null,
     view: 'main',
-    onceQuickKey: null,
     pickPeriod: null,
     pickDate: null,
     pickHour: null,
-    pickMin: null,
+    pickMinTens: null,
+    pickMinUnits: null,
     preciseRunAt: null,
     recFreq: null,
     recDays: [],
     recMonthDay: null,
     recHour: null,
-    recMin: null,
+    recMinTens: null,
+    recMinUnits: null,
     destinataireId: null,
     couleurKey: 'bleu',
     relance: true,
@@ -496,20 +472,21 @@ type SelectKind =
   | 'type'
   | 'couleur'
   | 'dest'
-  | 'oquick'
   | 'pperiod'
   | 'pday'
   | 'phour'
-  | 'pmin'
+  | 'pmintens'
+  | 'pminunits'
   | 'rfreq'
   | 'rdays'
   | 'rmday'
   | 'rhour'
-  | 'rmin';
+  | 'rmintens'
+  | 'rminunits';
 
 const SELECT_KINDS = new Set<string>([
-  'type', 'couleur', 'dest', 'oquick', 'pperiod', 'pday', 'phour', 'pmin',
-  'rfreq', 'rdays', 'rmday', 'rhour', 'rmin',
+  'type', 'couleur', 'dest', 'pperiod', 'pday', 'phour', 'pmintens', 'pminunits',
+  'rfreq', 'rdays', 'rmday', 'rhour', 'rmintens', 'rminunits',
 ]);
 
 interface ParsedCustomId {
@@ -562,25 +539,25 @@ async function onSelect(
   wizardId: string,
 ): Promise<void> {
   const state = getState(wizardId, interaction.user.id);
-  if (!state) {
-    await expireReply(interaction);
-    return;
-  }
+  if (!state) return expireReply(interaction);
   const value = interaction.isStringSelectMenu() ? interaction.values[0] : undefined;
 
   switch (kind) {
     case 'type':
+      // Choix du type → on enchaîne directement sur le choix du jour/fréquence.
       state.kind = value as Kind;
+      if (state.kind === 'once') {
+        state.view = 'once_date';
+        if (!state.pickPeriod) state.pickPeriod = currentPeriodValue();
+      } else {
+        state.view = 'rec_config';
+      }
       break;
     case 'couleur':
       state.couleurKey = value!;
       break;
     case 'dest':
       state.destinataireId = (interaction as UserSelectMenuInteraction).values[0] ?? null;
-      break;
-    case 'oquick':
-      state.onceQuickKey = value!;
-      state.preciseRunAt = null; // les deux modes s'excluent
       break;
     case 'pperiod':
       state.pickPeriod = value!;
@@ -592,8 +569,11 @@ async function onSelect(
     case 'phour':
       state.pickHour = Number(value);
       break;
-    case 'pmin':
-      state.pickMin = Number(value);
+    case 'pmintens':
+      state.pickMinTens = Number(value);
+      break;
+    case 'pminunits':
+      state.pickMinUnits = Number(value);
       break;
     case 'rfreq':
       state.recFreq = value as RecFreq;
@@ -607,8 +587,11 @@ async function onSelect(
     case 'rhour':
       state.recHour = Number(value);
       break;
-    case 'rmin':
-      state.recMin = Number(value);
+    case 'rmintens':
+      state.recMinTens = Number(value);
+      break;
+    case 'rminunits':
+      state.recMinUnits = Number(value);
       break;
   }
   await interaction.update(buildPayload(wizardId, state));
@@ -618,39 +601,35 @@ async function onSelect(
 
 async function onQuand(interaction: ButtonInteraction, wizardId: string): Promise<void> {
   const state = getState(wizardId, interaction.user.id);
-  if (!state || !state.kind) {
-    await expireReply(interaction);
-    return;
-  }
+  if (!state || !state.kind) return expireReply(interaction);
   if (state.kind === 'once') {
-    state.view = 'once_when';
+    state.view = 'once_date';
+    if (!state.pickPeriod) state.pickPeriod = currentPeriodValue();
   } else {
-    state.view = 'rec_when';
-    if (state.recHour === null) state.recHour = 9;
-    if (state.recMin === null) state.recMin = 0;
+    state.view = 'rec_config';
   }
   await interaction.update(buildPayload(wizardId, state));
 }
 
-async function onOncePrecise(interaction: ButtonInteraction, wizardId: string): Promise<void> {
+async function onOnceDateNext(interaction: ButtonInteraction, wizardId: string): Promise<void> {
   const state = getState(wizardId, interaction.user.id);
   if (!state) return expireReply(interaction);
-  state.view = 'once_precise';
-  if (!state.pickPeriod) state.pickPeriod = currentPeriodValue();
-  await interaction.update(buildPayload(wizardId, state));
-}
-
-async function onPValider(interaction: ButtonInteraction, wizardId: string): Promise<void> {
-  const state = getState(wizardId, interaction.user.id);
-  if (!state) return expireReply(interaction);
-  if (!state.pickDate || state.pickHour === null || state.pickMin === null) {
-    await interaction.reply({
-      embeds: [buildErrorEmbed('Choisis le mois, le jour, l’heure et les minutes.')],
-      flags: MessageFlags.Ephemeral,
-    });
+  if (!state.pickDate) {
+    await interaction.reply({ embeds: [buildErrorEmbed('Choisis d’abord le jour.')], flags: MessageFlags.Ephemeral });
     return;
   }
-  const runAt = selectionToDate(state.pickDate, state.pickHour, state.pickMin);
+  state.view = 'once_time';
+  await interaction.update(buildPayload(wizardId, state));
+}
+
+async function onOnceValider(interaction: ButtonInteraction, wizardId: string): Promise<void> {
+  const state = getState(wizardId, interaction.user.id);
+  if (!state) return expireReply(interaction);
+  if (!state.pickDate || state.pickHour === null || state.pickMinTens === null) {
+    await interaction.reply({ embeds: [buildErrorEmbed('Choisis le jour, l’heure et les minutes.')], flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const runAt = selectionToDate(state.pickDate, state.pickHour, minuteOf(state.pickMinTens, state.pickMinUnits));
   if (runAt.getTime() <= Date.now()) {
     await interaction.reply({
       embeds: [buildErrorEmbed(`Cette date est déjà passée : ${formatFrenchDate(runAt)}.`)],
@@ -659,40 +638,42 @@ async function onPValider(interaction: ButtonInteraction, wizardId: string): Pro
     return;
   }
   state.preciseRunAt = runAt;
-  state.onceQuickKey = null;
   state.view = 'main';
   await interaction.update(buildPayload(wizardId, state));
 }
 
-async function onRValider(interaction: ButtonInteraction, wizardId: string): Promise<void> {
+async function onRecConfigNext(interaction: ButtonInteraction, wizardId: string): Promise<void> {
+  const state = getState(wizardId, interaction.user.id);
+  if (!state) return expireReply(interaction);
+  const depsOk =
+    !!state.recFreq &&
+    (state.recFreq !== 'weekly' || state.recDays.length > 0) &&
+    (state.recFreq !== 'monthly' || state.recMonthDay !== null);
+  if (!depsOk) {
+    await interaction.reply({ embeds: [buildErrorEmbed('Complète la fréquence (et les jours si besoin).')], flags: MessageFlags.Ephemeral });
+    return;
+  }
+  state.view = 'rec_time';
+  if (state.recHour === null) state.recHour = 9;
+  if (state.recMinTens === null) state.recMinTens = 0;
+  await interaction.update(buildPayload(wizardId, state));
+}
+
+async function onRecValider(interaction: ButtonInteraction, wizardId: string): Promise<void> {
   const state = getState(wizardId, interaction.user.id);
   if (!state) return expireReply(interaction);
   if (recurrenceFromState(state) === null) {
-    const missing =
-      state.recFreq === 'weekly' && state.recDays.length === 0
-        ? 'Choisis au moins un jour.'
-        : 'Complète la fréquence, l’heure et les minutes.';
-    await interaction.reply({
-      embeds: [buildErrorEmbed(missing)],
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ embeds: [buildErrorEmbed('Complète la fréquence, l’heure et les minutes.')], flags: MessageFlags.Ephemeral });
     return;
   }
   state.view = 'main';
   await interaction.update(buildPayload(wizardId, state));
 }
 
-async function onBackToMain(interaction: ButtonInteraction, wizardId: string): Promise<void> {
+async function onBack(interaction: ButtonInteraction, wizardId: string, to: View): Promise<void> {
   const state = getState(wizardId, interaction.user.id);
   if (!state) return expireReply(interaction);
-  state.view = 'main';
-  await interaction.update(buildPayload(wizardId, state));
-}
-
-async function onBackToOnceWhen(interaction: ButtonInteraction, wizardId: string): Promise<void> {
-  const state = getState(wizardId, interaction.user.id);
-  if (!state) return expireReply(interaction);
-  state.view = 'once_when';
+  state.view = to;
   await interaction.update(buildPayload(wizardId, state));
 }
 
@@ -725,10 +706,7 @@ async function onTexte(interaction: ButtonInteraction, wizardId: string): Promis
 
 async function onCancel(interaction: ButtonInteraction, wizardId: string): Promise<void> {
   STATES.delete(wizardId);
-  await interaction.update({
-    embeds: [buildErrorEmbed('Création de rappel annulée.')],
-    components: [],
-  });
+  await interaction.update({ embeds: [buildErrorEmbed('Création de rappel annulée.')], components: [] });
 }
 
 async function onCreate(
@@ -750,16 +728,9 @@ async function onCreate(
   let rawInput: string;
   try {
     if (state.kind === 'once') {
-      if (state.preciseRunAt) {
-        parsed = { type: 'once', runAt: state.preciseRunAt, humanReadable: formatFrenchDate(state.preciseRunAt) };
-        rawInput = formatFrenchDate(state.preciseRunAt);
-      } else {
-        const quick = QUICK_BY_KEY.get(state.onceQuickKey!);
-        if (!quick) throw new Error('Délai inconnu.');
-        const runAt = new Date(Date.now() + quick.ms);
-        parsed = { type: 'once', runAt, humanReadable: formatFrenchDate(runAt) };
-        rawInput = quick.label;
-      }
+      const runAt = state.preciseRunAt!;
+      parsed = { type: 'once', runAt, humanReadable: formatFrenchDate(runAt) };
+      rawInput = formatFrenchDate(runAt);
     } else {
       const rec = recurrenceFromState(state);
       if (!rec) throw new Error('Récurrence incomplète.');
@@ -806,10 +777,7 @@ async function onCreate(
   scheduler.schedule(inserted);
   STATES.delete(wizardId);
 
-  await interaction.update({
-    embeds: [buildAddedEmbed(inserted, parsed.humanReadable)],
-    components: [],
-  });
+  await interaction.update({ embeds: [buildAddedEmbed(inserted, parsed.humanReadable)], components: [] });
 
   try {
     const channel = interaction.channel;
@@ -863,7 +831,11 @@ export async function handleWizardInteraction(
   const parsed = parseWizardCustomId(interaction.customId);
   if (!parsed) return;
 
-  if ((interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) && parsed.kind !== 'btn' && parsed.kind !== 'modal') {
+  if (
+    (interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) &&
+    parsed.kind !== 'btn' &&
+    parsed.kind !== 'modal'
+  ) {
     return onSelect(interaction, parsed.kind, parsed.wizardId);
   }
 
@@ -873,18 +845,22 @@ export async function handleWizardInteraction(
         return onTexte(interaction, parsed.wizardId);
       case 'quand':
         return onQuand(interaction, parsed.wizardId);
-      case 'oprecise':
-        return onOncePrecise(interaction, parsed.wizardId);
-      case 'oretour':
-        return onBackToMain(interaction, parsed.wizardId);
-      case 'pvalider':
-        return onPValider(interaction, parsed.wizardId);
-      case 'pretour':
-        return onBackToOnceWhen(interaction, parsed.wizardId);
+      case 'odatenext':
+        return onOnceDateNext(interaction, parsed.wizardId);
+      case 'odateback':
+        return onBack(interaction, parsed.wizardId, 'main');
+      case 'ovalider':
+        return onOnceValider(interaction, parsed.wizardId);
+      case 'otimeback':
+        return onBack(interaction, parsed.wizardId, 'once_date');
+      case 'rconfignext':
+        return onRecConfigNext(interaction, parsed.wizardId);
+      case 'rconfigback':
+        return onBack(interaction, parsed.wizardId, 'main');
       case 'rvalider':
-        return onRValider(interaction, parsed.wizardId);
-      case 'rretour':
-        return onBackToMain(interaction, parsed.wizardId);
+        return onRecValider(interaction, parsed.wizardId);
+      case 'rtimeback':
+        return onBack(interaction, parsed.wizardId, 'rec_config');
       case 'relance':
         return onRelance(interaction, parsed.wizardId);
       case 'create':

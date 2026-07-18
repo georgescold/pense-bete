@@ -85,21 +85,21 @@ npm run dev               # tsx watch
 
 ## Formulaire guidé (`/rappel ajouter`)
 
-Tout se fait **par menus**, sans saisie de date à la main. L'assistant suit des étapes :
+Tout se fait **par menus**, sans saisie de date à la main. On choisit d'abord le
+**type**, puis on enchaîne directement sur le **jour/date** et l'**heure** :
 
-1. **Type** : 📅 *Ponctuel (une fois)* ou 🔁 *Récurrent (régulier)*.
-2. **Texte** du rappel.
-3. **Quand** (bouton dédié, adapté au type) :
-   - **Ponctuel** → un *délai rapide* (dans 15 min, 1 h, 2 j…) **ou** *📅 Date & heure précises* :
-     cascade **mois** (chaque mois en deux moitiés 1–15 / 16–fin, ~12 mois d'avance) →
-     **jour** → **heure** → **minutes**, avec aperçu.
-   - **Récurrent** → *fréquence* (tous les jours, chaque semaine avec choix des jours,
-     jours ouvrés, week-end, chaque mois avec choix du jour, dernier jour du mois) +
-     **heure** + **minutes**.
-4. **Destinataire**, **couleur**, **relance** (ponctuel), puis **✅ Créer**.
+1. **Type** : 📅 *Ponctuel (une fois)* ou 🔁 *Récurrent (régulier)* → passe aussitôt à l'étape suivante.
+2. **Quand** (2 petits écrans) :
+   - **Ponctuel** → *écran 1 : jour* (mois en deux moitiés 1–15 / 16–fin sur ~12 mois → jour),
+     *écran 2 : heure* (heure + minutes **dizaines** + **unités**, au pas de 1).
+   - **Récurrent** → *écran 1 : fréquence* (tous les jours, chaque semaine avec choix des jours,
+     jours ouvrés, week-end, chaque mois avec choix du jour, dernier jour du mois),
+     *écran 2 : heure* (idem, minutes au pas de 1).
+3. **Texte**, **destinataire**, **couleur**, **relance** (ponctuel), puis **✅ Créer**.
 
-> Il n'y a plus de champ texte libre pour la date : chaque choix passe par un menu, donc
-> aucune ambiguïté d'interprétation.
+> Minutes au pas de 1 via deux menus (dizaines 00–50 + unités 0–9), car un menu Discord
+> est limité à 25 options (60 minutes n'y tiennent pas). L'heure finale s'affiche en aperçu.
+> Plus aucun champ texte libre pour la date.
 
 ## Relance ("réveil") — rappels non validés
 

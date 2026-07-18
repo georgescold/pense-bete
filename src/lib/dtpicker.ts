@@ -7,6 +7,8 @@ import {
   buildDayOptions,
   buildHourOptions,
   buildMinuteOptions,
+  buildMinuteTensOptions,
+  buildMinuteUnitsOptions,
   buildPeriodOptions,
   type SelectOpt,
 } from './datetime';
@@ -74,6 +76,30 @@ export function buildMinuteSelect(
     customId,
     '⏱️ Choisis les minutes',
     buildMinuteOptions(),
+    selected === null ? null : String(selected),
+  );
+}
+
+export function buildMinuteTensSelect(
+  customId: string,
+  selected: number | null,
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  return buildSelect(
+    customId,
+    '⏱️ Minutes — dizaines (00,10,…,50)',
+    buildMinuteTensOptions(),
+    selected === null ? null : String(selected),
+  );
+}
+
+export function buildMinuteUnitsSelect(
+  customId: string,
+  selected: number | null,
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  return buildSelect(
+    customId,
+    '⏱️ Minutes — unités (+0 … +9)',
+    buildMinuteUnitsOptions(),
     selected === null ? null : String(selected),
   );
 }

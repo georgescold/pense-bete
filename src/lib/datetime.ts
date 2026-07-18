@@ -161,6 +161,19 @@ export function buildMinuteOptions(): SelectOpt[] {
   });
 }
 
+/** Dizaines de minutes (00,10,…,50) — 1re moitié d'une minute au pas de 1. */
+export function buildMinuteTensOptions(): SelectOpt[] {
+  return [0, 10, 20, 30, 40, 50].map((m) => ({
+    value: String(m),
+    label: `${m.toString().padStart(2, '0')} min`,
+  }));
+}
+
+/** Unités de minutes (+0 … +9) — 2nde moitié, à additionner aux dizaines. */
+export function buildMinuteUnitsOptions(): SelectOpt[] {
+  return Array.from({ length: 10 }, (_, u) => ({ value: String(u), label: `+${u} min` }));
+}
+
 /** Valeur "YYYY-M-D" (calendrier Paris) pour aujourd'hui + offsetDays jours. */
 export function parisDateValue(offsetDays: number, now: Date = new Date()): string {
   const today = parisYMD(now);
