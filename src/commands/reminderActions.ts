@@ -19,8 +19,13 @@ import {
   type ReminderRow,
 } from '../db/repository';
 import { computeNextCronRun, type Scheduler } from '../scheduler/scheduler';
-import { buildDateSelect, buildHourSelect, buildMinuteSelect } from '../lib/dtpicker';
-import { parisDateValue, selectionToDate } from '../lib/datetime';
+import {
+  buildDaySelect,
+  buildHourSelect,
+  buildMinuteSelect,
+  buildPeriodSelect,
+} from '../lib/dtpicker';
+import { currentPeriodValue, parisDateValue, selectionToDate } from '../lib/datetime';
 import { buildErrorEmbed } from '../lib/embeds';
 import { formatFrenchDate } from '../lib/format';
 
@@ -185,6 +190,7 @@ async function handleSnoozePick(
 interface RedefState {
   reminderId: number;
   userId: string;
+  period: string | null;
   date: string | null;
   hour: number | null;
   min: number | null;
@@ -218,7 +224,8 @@ function buildRedefPayload(s: RedefState) {
   return {
     embeds: [embed],
     components: [
-      buildDateSelect(`redef:date:${s.reminderId}`, s.date),
+      buildPeriodSelect(`redef:period:${s.reminderId}`, s.period),
+      buildDaySelect(`redef:day:${s.reminderId}`, s.period, s.date),
       buildHourSelect(`redef:hour:${s.reminderId}`, s.hour),
       buildMinuteSelect(`redef:min:${s.reminderId}`, s.min),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -251,6 +258,7 @@ async function handleRedefButton(interaction: ButtonInteraction, id: number): Pr
   const s: RedefState = {
     reminderId: id,
     userId: interaction.user.id,
+    period: currentPeriodValue(),
     date: null,
     hour: null,
     min: null,
@@ -269,7 +277,7 @@ function getRedef(id: number, userId: string): RedefState | null {
 async function handleRedefSelect(
   interaction: StringSelectMenuInteraction,
   id: number,
-  field: 'date' | 'hour' | 'min',
+  field: 'period' | 'day' | 'hour' | 'min',
 ): Promise<void> {
   const s = getRedef(id, interaction.user.id);
   if (!s) {
@@ -277,9 +285,16 @@ async function handleRedefSelect(
     return;
   }
   const value = interaction.values[0]!;
-  if (field === 'date') s.date = value;
-  else if (field === 'hour') s.hour = Number(value);
-  else s.min = Number(value);
+  if (field === 'period') {
+    s.period = value;
+    s.date = null;
+  } else if (field === 'day') {
+    s.date = value;
+  } else if (field === 'hour') {
+    s.hour = Number(value);
+  } else {
+    s.min = Number(value);
+  }
   await interaction.update(buildRedefPayload(s));
 }
 
@@ -350,7 +365,10 @@ export async function handleReminderComponent(
   }
 
   if (namespace === 'redef') {
-    if (interaction.isStringSelectMenu() && (action === 'date' || action === 'hour' || action === 'min')) {
+    if (
+      interaction.isStringSelectMenu() &&
+      (action === 'period' || action === 'day' || action === 'hour' || action === 'min')
+    ) {
       return handleRedefSelect(interaction, id, action);
     }
     if (interaction.isButton()) {

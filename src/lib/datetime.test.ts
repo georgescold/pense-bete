@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   ESCALATION_LADDER_MS,
-  buildDateOptions,
+  buildDayOptions,
   buildHourOptions,
   buildMinuteOptions,
+  buildPeriodOptions,
+  currentPeriodValue,
   escalationDelayLabel,
   escalationDelayMs,
   parisDateValue,
@@ -34,14 +36,6 @@ describe('selectionToDate', () => {
 });
 
 describe('options des menus', () => {
-  it('date : 25 options, la 1re = Aujourd’hui, la 2e = Demain', () => {
-    const opts = buildDateOptions(new Date('2026-07-18T10:00:00Z'));
-    expect(opts).toHaveLength(25);
-    expect(opts[0]!.label).toMatch(/Aujourd'hui/);
-    expect(opts[1]!.label).toMatch(/Demain/);
-    expect(opts[0]!.value).toBe('2026-7-18');
-  });
-
   it('heures : 24 options', () => {
     expect(buildHourOptions()).toHaveLength(24);
   });
@@ -50,6 +44,41 @@ describe('options des menus', () => {
     const m = buildMinuteOptions();
     expect(m).toHaveLength(12);
     expect(m.map((o) => o.value)).toContain('55');
+  });
+});
+
+describe('sélecteur période / jour', () => {
+  const now = new Date('2026-07-18T10:00:00Z'); // 18 juillet 2026 (2nde moitié)
+
+  it('respecte la limite Discord de 25 options', () => {
+    const periods = buildPeriodOptions(now);
+    expect(periods.length).toBeLessThanOrEqual(25);
+    expect(periods.length).toBeGreaterThan(0);
+  });
+
+  it('la 1re période contient aujourd’hui et démarre au bon endroit', () => {
+    const periods = buildPeriodOptions(now);
+    expect(periods[0]!.value).toBe('2026-7-2'); // juillet 2026, 2nde moitié
+    expect(periods[0]!.label).toMatch(/juillet 2026/);
+    expect(currentPeriodValue(now)).toBe('2026-7-2');
+  });
+
+  it('les jours passés du mois courant sont exclus', () => {
+    const days = buildDayOptions('2026-7-2', now); // 16–31 juillet, mais on est le 18
+    expect(days[0]!.value).toBe('2026-7-18');
+    expect(days.every((d) => Number(d.value.split('-')[2]) >= 18)).toBe(true);
+    expect(days.map((d) => d.value)).toContain('2026-7-31');
+  });
+
+  it('un jour choisi se reconvertit en instant correct', () => {
+    const d = selectionToDate('2026-8-30', 14, 0); // 30 août → été (+02:00)
+    expect(d.toISOString()).toBe('2026-08-30T12:00:00.000Z');
+  });
+
+  it('aucun menu jour ne dépasse 25 options', () => {
+    for (const p of buildPeriodOptions(now)) {
+      expect(buildDayOptions(p.value, now).length).toBeLessThanOrEqual(25);
+    }
   });
 });
 

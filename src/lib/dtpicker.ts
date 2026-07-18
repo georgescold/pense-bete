@@ -4,9 +4,10 @@ import {
   StringSelectMenuOptionBuilder,
 } from 'discord.js';
 import {
-  buildDateOptions,
+  buildDayOptions,
   buildHourOptions,
   buildMinuteOptions,
+  buildPeriodOptions,
   type SelectOpt,
 } from './datetime';
 
@@ -15,12 +16,15 @@ function buildSelect(
   placeholder: string,
   options: SelectOpt[],
   selected: string | null,
+  disabled = false,
 ): ActionRowBuilder<StringSelectMenuBuilder> {
+  const safeOptions = options.length > 0 ? options : [{ value: '__none__', label: '—' }];
   const menu = new StringSelectMenuBuilder()
     .setCustomId(customId)
     .setPlaceholder(placeholder)
+    .setDisabled(disabled || options.length === 0)
     .addOptions(
-      options.map((o) =>
+      safeOptions.map((o) =>
         new StringSelectMenuOptionBuilder()
           .setLabel(o.label)
           .setValue(o.value)
@@ -30,12 +34,24 @@ function buildSelect(
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 }
 
-export function buildDateSelect(
+export function buildPeriodSelect(
   customId: string,
   selected: string | null,
   now: Date = new Date(),
 ): ActionRowBuilder<StringSelectMenuBuilder> {
-  return buildSelect(customId, '📅 Choisis le jour', buildDateOptions(now), selected);
+  return buildSelect(customId, '🗓️ Choisis le mois', buildPeriodOptions(now), selected);
+}
+
+export function buildDaySelect(
+  customId: string,
+  periodValue: string | null,
+  selected: string | null,
+  now: Date = new Date(),
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  if (!periodValue) {
+    return buildSelect(customId, '📅 Choisis d\'abord le mois', [], selected, true);
+  }
+  return buildSelect(customId, '📅 Choisis le jour', buildDayOptions(periodValue, now), selected);
 }
 
 export function buildHourSelect(

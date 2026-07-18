@@ -61,13 +61,6 @@ const PARIS_YMD = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 });
 
-const PARIS_DAY_LABEL = new Intl.DateTimeFormat('fr-FR', {
-  timeZone: TZ,
-  weekday: 'short',
-  day: 'numeric',
-  month: 'short',
-});
-
 function parisYMD(d: Date): { year: number; month: number; day: number } {
   const parts = PARIS_YMD.formatToParts(d);
   const map: Record<string, string> = {};
@@ -75,29 +68,83 @@ function parisYMD(d: Date): { year: number; month: number; day: number } {
   return { year: Number(map.year), month: Number(map.month), day: Number(map.day) };
 }
 
-/** Nombre de jours proposés dans le menu déroulant « Date » (limite Discord : 25 options). */
-export const DATE_OPTION_DAYS = 25;
+// --- Sélecteur Période (mois × 2 moitiés) + Jour -------------------------
+
+const MONTHS_FR = [
+  'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+  'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre',
+];
+
+const DAY_LABEL_FMT = new Intl.DateTimeFormat('fr-FR', {
+  timeZone: TZ,
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+});
+
+function daysInMonth(year: number, month: number): number {
+  // month 1-12 ; le "jour 0" du mois suivant = dernier jour du mois courant.
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** Nombre de mois proposés dans le sélecteur de période. */
+export const PERIOD_MONTHS = 12;
 
 /**
- * Options de date relatives : « Aujourd'hui », « Demain », puis les jours
- * suivants (jusqu'à 25). value = "YYYY-M-D" (calendrier Paris).
+ * Options « Période » : chaque mois est scindé en deux moitiés (1–15 / 16–fin)
+ * pour tenir sous la limite Discord de 25 options tout en couvrant ~1 an.
+ * value = "YYYY-M-H" (H = 1 pour la 1re moitié, 2 pour la 2nde).
  */
-export function buildDateOptions(now: Date = new Date()): SelectOpt[] {
+export function buildPeriodOptions(now: Date = new Date()): SelectOpt[] {
   const today = parisYMD(now);
-  // Midi UTC du jour courant : loin des bascules DST, l'ajout de N jours
-  // conserve la même date murale.
-  const base = Date.UTC(today.year, today.month - 1, today.day, 12, 0, 0);
   const opts: SelectOpt[] = [];
-  for (let i = 0; i < DATE_OPTION_DAYS; i++) {
-    const d = new Date(base + i * 86_400_000);
-    const ymd = parisYMD(d);
-    const dateLabel = PARIS_DAY_LABEL.format(d);
-    let label = dateLabel;
-    if (i === 0) label = `Aujourd'hui · ${dateLabel}`;
-    else if (i === 1) label = `Demain · ${dateLabel}`;
-    opts.push({ value: `${ymd.year}-${ymd.month}-${ymd.day}`, label: label.slice(0, 100) });
+  for (let i = 0; i < PERIOD_MONTHS; i++) {
+    const monthIndex = today.month - 1 + i; // 0-based, peut dépasser 11
+    const year = today.year + Math.floor(monthIndex / 12);
+    const month = (monthIndex % 12) + 1; // 1-12
+    const last = daysInMonth(year, month);
+    const name = MONTHS_FR[month - 1]!;
+    for (const half of [1, 2] as const) {
+      const startDay = half === 1 ? 1 : 16;
+      const endDay = half === 1 ? 15 : last;
+      // On saute une moitié entièrement passée (mois courant uniquement).
+      if (year === today.year && month === today.month && today.day > endDay) continue;
+      const label = `${name} ${year} · ${startDay}–${endDay}`;
+      opts.push({ value: `${year}-${month}-${half}`, label: label.slice(0, 100) });
+    }
+  }
+  return opts.slice(0, 25);
+}
+
+/** Jours (SelectOpt) d'une période donnée, en excluant les jours déjà passés. */
+export function buildDayOptions(periodValue: string, now: Date = new Date()): SelectOpt[] {
+  const [year, month, half] = periodValue.split('-').map(Number);
+  if (!year || !month || !half) return [];
+  const last = daysInMonth(year, month);
+  const startDay = half === 1 ? 1 : 16;
+  const endDay = half === 1 ? 15 : last;
+  const today = parisYMD(now);
+  const opts: SelectOpt[] = [];
+  for (let d = startDay; d <= endDay; d++) {
+    // Exclut les jours strictement avant aujourd'hui (comparaison calendaire).
+    if (
+      year < today.year ||
+      (year === today.year && month < today.month) ||
+      (year === today.year && month === today.month && d < today.day)
+    ) {
+      continue;
+    }
+    const dt = new Date(Date.UTC(year, month - 1, d, 12, 0, 0));
+    opts.push({ value: `${year}-${month}-${d}`, label: DAY_LABEL_FMT.format(dt).slice(0, 100) });
   }
   return opts;
+}
+
+/** Renvoie la période ("YYYY-M-H") qui contient aujourd'hui. */
+export function currentPeriodValue(now: Date = new Date()): string {
+  const t = parisYMD(now);
+  const half = t.day <= 15 ? 1 : 2;
+  return `${t.year}-${t.month}-${half}`;
 }
 
 export function buildHourOptions(): SelectOpt[] {

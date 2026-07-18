@@ -74,10 +74,10 @@ npm run dev               # tsx watch
 ## Date & heure précises (menus déroulants)
 
 Dans `/rappel ajouter`, l'option **« 📅 Date & heure précises… »** du menu *Quand* ouvre
-une cascade de menus déroulants : **jour** (aujourd'hui → +24 jours) → **heure** →
-**minutes** (pas de 5). Un aperçu de la date finale s'affiche avant de valider.
-Pour les dates au-delà de 24 jours ou les récurrences, utilise l'option
-*« 📝 Personnalisé »* (texte libre).
+une cascade de menus déroulants : **mois** (jusqu'à ~12 mois à l'avance, chaque mois
+scindé en deux moitiés 1–15 / 16–fin pour tenir sous la limite Discord de 25 options)
+→ **jour** → **heure** → **minutes** (pas de 5). Un aperçu de la date finale s'affiche
+avant de valider. Pour les récurrences, utilise l'option *« 📝 Personnalisé »* (texte libre).
 
 ## Relance ("réveil") — rappels non validés
 

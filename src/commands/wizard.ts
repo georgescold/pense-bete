@@ -28,8 +28,13 @@ import {
   PRESETS,
   PRESET_BY_KEY,
 } from '../lib/presets';
-import { ESCALATION_SUMMARY, selectionToDate } from '../lib/datetime';
-import { buildDateSelect, buildHourSelect, buildMinuteSelect } from '../lib/dtpicker';
+import { ESCALATION_SUMMARY, currentPeriodValue, selectionToDate } from '../lib/datetime';
+import {
+  buildDaySelect,
+  buildHourSelect,
+  buildMinuteSelect,
+  buildPeriodSelect,
+} from '../lib/dtpicker';
 import { formatFrenchDate } from '../lib/format';
 
 const PRECISE_KEY = 'precise';
@@ -45,6 +50,7 @@ interface WizardState {
   couleurKey: string;
   relance: boolean;
   view: 'main' | 'picker';
+  pickPeriod: string | null;
   pickDate: string | null;
   pickHour: number | null;
   pickMin: number | null;
@@ -247,7 +253,8 @@ function buildPayload(wizardId: string, state: WizardState) {
     return {
       embeds: [buildPickerEmbed(state)],
       components: [
-        buildDateSelect(`wizard:pdate:${wizardId}`, state.pickDate),
+        buildPeriodSelect(`wizard:pperiod:${wizardId}`, state.pickPeriod),
+        buildDaySelect(`wizard:pday:${wizardId}`, state.pickPeriod, state.pickDate),
         buildHourSelect(`wizard:phour:${wizardId}`, state.pickHour),
         buildMinuteSelect(`wizard:pmin:${wizardId}`, state.pickMin),
         buildPickerButtonRow(wizardId, state),
@@ -279,6 +286,7 @@ export async function startWizard(interaction: ChatInputCommandInteraction): Pro
     couleurKey: 'bleu',
     relance: true,
     view: 'main',
+    pickPeriod: null,
     pickDate: null,
     pickHour: null,
     pickMin: null,
@@ -297,7 +305,8 @@ type WizardKind =
   | 'quand'
   | 'couleur'
   | 'dest'
-  | 'pdate'
+  | 'pperiod'
+  | 'pday'
   | 'phour'
   | 'pmin'
   | 'btn'
@@ -317,7 +326,8 @@ function parseWizardCustomId(customId: string): {
     parts[1] === 'quand' ||
     parts[1] === 'couleur' ||
     parts[1] === 'dest' ||
-    parts[1] === 'pdate' ||
+    parts[1] === 'pperiod' ||
+    parts[1] === 'pday' ||
     parts[1] === 'phour' ||
     parts[1] === 'pmin'
   ) {
@@ -359,6 +369,7 @@ async function handleQuandSelect(interaction: StringSelectMenuInteraction, wizar
 
   if (value === PRECISE_KEY) {
     state.view = 'picker';
+    if (!state.pickPeriod) state.pickPeriod = currentPeriodValue();
     await interaction.update(buildPayload(wizardId, state));
     return;
   }
@@ -408,7 +419,7 @@ async function handleDestSelect(interaction: UserSelectMenuInteraction, wizardId
 async function handlePickerSelect(
   interaction: StringSelectMenuInteraction,
   wizardId: string,
-  field: 'pdate' | 'phour' | 'pmin',
+  field: 'pperiod' | 'pday' | 'phour' | 'pmin',
 ): Promise<void> {
   const state = getState(wizardId, interaction.user.id);
   if (!state) {
@@ -416,9 +427,16 @@ async function handlePickerSelect(
     return;
   }
   const value = interaction.values[0]!;
-  if (field === 'pdate') state.pickDate = value;
-  else if (field === 'phour') state.pickHour = Number(value);
-  else state.pickMin = Number(value);
+  if (field === 'pperiod') {
+    state.pickPeriod = value;
+    state.pickDate = null; // les jours changent → on réinitialise le jour choisi
+  } else if (field === 'pday') {
+    state.pickDate = value;
+  } else if (field === 'phour') {
+    state.pickHour = Number(value);
+  } else {
+    state.pickMin = Number(value);
+  }
   await interaction.update(buildPayload(wizardId, state));
 }
 
@@ -668,7 +686,12 @@ export async function handleWizardInteraction(
   if (interaction.isStringSelectMenu()) {
     if (parsed.kind === 'quand') return handleQuandSelect(interaction, parsed.wizardId);
     if (parsed.kind === 'couleur') return handleCouleurSelect(interaction, parsed.wizardId);
-    if (parsed.kind === 'pdate' || parsed.kind === 'phour' || parsed.kind === 'pmin') {
+    if (
+      parsed.kind === 'pperiod' ||
+      parsed.kind === 'pday' ||
+      parsed.kind === 'phour' ||
+      parsed.kind === 'pmin'
+    ) {
       return handlePickerSelect(interaction, parsed.wizardId, parsed.kind);
     }
   }
