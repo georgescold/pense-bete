@@ -83,13 +83,23 @@ npm run dev               # tsx watch
   (Nécessite la permission *Gérer les messages*.)
 - **Mentionner le bot** (`@Pense-bête`) renvoie l'aide complète.
 
-## Date & heure précises (menus déroulants)
+## Formulaire guidé (`/rappel ajouter`)
 
-Dans `/rappel ajouter`, l'option **« 📅 Date & heure précises… »** du menu *Quand* ouvre
-une cascade de menus déroulants : **mois** (jusqu'à ~12 mois à l'avance, chaque mois
-scindé en deux moitiés 1–15 / 16–fin pour tenir sous la limite Discord de 25 options)
-→ **jour** → **heure** → **minutes** (pas de 5). Un aperçu de la date finale s'affiche
-avant de valider. Pour les récurrences, utilise l'option *« 📝 Personnalisé »* (texte libre).
+Tout se fait **par menus**, sans saisie de date à la main. L'assistant suit des étapes :
+
+1. **Type** : 📅 *Ponctuel (une fois)* ou 🔁 *Récurrent (régulier)*.
+2. **Texte** du rappel.
+3. **Quand** (bouton dédié, adapté au type) :
+   - **Ponctuel** → un *délai rapide* (dans 15 min, 1 h, 2 j…) **ou** *📅 Date & heure précises* :
+     cascade **mois** (chaque mois en deux moitiés 1–15 / 16–fin, ~12 mois d'avance) →
+     **jour** → **heure** → **minutes**, avec aperçu.
+   - **Récurrent** → *fréquence* (tous les jours, chaque semaine avec choix des jours,
+     jours ouvrés, week-end, chaque mois avec choix du jour, dernier jour du mois) +
+     **heure** + **minutes**.
+4. **Destinataire**, **couleur**, **relance** (ponctuel), puis **✅ Créer**.
+
+> Il n'y a plus de champ texte libre pour la date : chaque choix passe par un menu, donc
+> aucune ambiguïté d'interprétation.
 
 ## Relance ("réveil") — rappels non validés
 
