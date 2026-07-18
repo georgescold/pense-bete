@@ -21,6 +21,7 @@ export interface ReminderRow {
   escalation_enabled: boolean;
   escalation_step: number;
   status: ReminderStatus;
+  pin_message_id: string | null;
   created_at: string;
 }
 
@@ -48,6 +49,7 @@ export type ReminderPatch = Partial<{
   escalation_enabled: boolean;
   is_paused: boolean;
   raw_input: string;
+  pin_message_id: string | null;
 }>;
 
 const TABLE = 'reminders';

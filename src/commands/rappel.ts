@@ -21,6 +21,7 @@ import {
   buildSuccessEmbed,
 } from '../lib/embeds';
 import { startWizard } from './wizard';
+import { unpinReminder } from '../lib/pins';
 import type { Command } from './types';
 
 const data = new SlashCommandBuilder()
@@ -214,6 +215,7 @@ async function handleSupprimer(
     await ephemeralError(interaction, `Aucun rappel #${id} ne vous appartient.`);
     return;
   }
+  await unpinReminder(interaction.client, row);
   await deleteReminder(id);
   ctx.scheduler.unschedule(id);
   await interaction.reply({

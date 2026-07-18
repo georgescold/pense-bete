@@ -16,8 +16,10 @@ Bot Discord personnel de rappels (pense-bête), avec rappels ponctuels et récur
 
 1. Créer une application sur [Discord Developer Portal](https://discord.com/developers/applications).
 2. Onglet **Bot** → copier le **token**.
-3. Onglet **OAuth2 → URL Generator** → scopes : `bot`, `applications.commands` → permissions : `Send Messages`, `Embed Links`, `Mention Everyone`, `Read Message History`.
+3. Onglet **OAuth2 → URL Generator** → scopes : `bot`, `applications.commands` → permissions : `Send Messages`, `Embed Links`, `Mention Everyone`, `Read Message History`, **`Manage Messages`** (nécessaire pour **épingler** les rappels).
 4. Inviter le bot via l'URL générée.
+
+> Aucun intent privilégié requis : mentionner le bot suffit à recevoir le message (Discord fournit le contenu des messages qui mentionnent le bot). L'intent `GuildMessages` (non privilégié) est activé côté code.
 
 ## Setup Supabase
 
@@ -70,6 +72,15 @@ npm run dev               # tsx watch
 | `/rappel supprimer id:<…>` | Supprime |
 | `/rappel pause id:<…>` | Met en pause |
 | `/rappel reprendre id:<…>` | Reprend |
+| **@mention du bot** | Affiche l'aide (toutes les commandes) |
+
+## Salon & épinglage
+
+- Un rappel se déclenche **dans le salon où il a été créé** (le `channel_id` est mémorisé).
+- À la création, le **récap est épinglé** dans le salon tant que le rappel est actif.
+  Il est **dés-épinglé** automatiquement au clic sur **✅ Fait** ou via `/rappel supprimer`.
+  (Nécessite la permission *Gérer les messages*.)
+- **Mentionner le bot** (`@Pense-bête`) renvoie l'aide complète.
 
 ## Date & heure précises (menus déroulants)
 

@@ -218,6 +218,42 @@ export function buildCalendarEmbed(rows: ReminderRow[], daysAhead: number): Embe
   return embed;
 }
 
+export function buildHelpEmbed(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(BLURPLE)
+    .setTitle('🧠 Pense-bête — aide')
+    .setDescription('Voici tout ce que je sais faire. Tape simplement une commande dans le salon.')
+    .addFields(
+      {
+        name: '➕ `/rappel ajouter`',
+        value:
+          'Ouvre un **formulaire simple** : texte, quand (choix rapides ou **📅 date & heure précises**), destinataire, couleur. Le rappel arrive **dans ce salon** et son récap est **épinglé** tant qu\'il est actif.',
+      },
+      {
+        name: '📋 `/rappel liste`',
+        value: 'Affiche tes rappels actifs (avec leur numéro `#id`).',
+      },
+      {
+        name: '📆 `/rappel calendrier`',
+        value: 'Vue calendrier des rappels à venir (option `jours` pour la période).',
+      },
+      {
+        name: '🗑️ `/rappel supprimer id:<n>`',
+        value: 'Supprime le rappel `#n` (et le dés-épingle).',
+      },
+      {
+        name: '⏸️ `/rappel pause id:<n>` · ▶️ `/rappel reprendre id:<n>`',
+        value: 'Met en pause / réactive un rappel.',
+      },
+      {
+        name: '🔔 Relance automatique ("réveil")',
+        value:
+          `Un rappel ponctuel te **relance tant que tu ne cliques pas ✅ Fait** (${ESCALATION_SUMMARY}). Sur chaque rappel : **✅ Fait** (stop) · **😴 Reporter** · **✏️ Redéfinir**. Désactivable via 🔔 dans le formulaire.`,
+      },
+    )
+    .setFooter({ text: 'Astuce : mentionne-moi (@) à tout moment pour revoir cette aide.' });
+}
+
 export function buildErrorEmbed(message: string): EmbedBuilder {
   return new EmbedBuilder().setColor(RED).setTitle('❌ Erreur').setDescription(message);
 }

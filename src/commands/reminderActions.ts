@@ -27,6 +27,7 @@ import {
 } from '../lib/dtpicker';
 import { currentPeriodValue, parisDateValue, selectionToDate } from '../lib/datetime';
 import { buildErrorEmbed } from '../lib/embeds';
+import { unpinReminder } from '../lib/pins';
 import { formatFrenchDate } from '../lib/format';
 
 export function isReminderComponent(customId: string): boolean {
@@ -56,6 +57,7 @@ async function handleDone(
       });
       return;
     }
+    await unpinReminder(interaction.client, r);
     try {
       await deleteReminder(id);
     } catch {

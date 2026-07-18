@@ -19,8 +19,9 @@ import {
 import { logger } from '../logger';
 import { parseFrenchSchedule, type ParsedSchedule } from '../scheduler/parser';
 import { computeNextCronRun, type Scheduler } from '../scheduler/scheduler';
-import { insertReminder } from '../db/repository';
+import { insertReminder, updateReminder } from '../db/repository';
 import { buildAddedEmbed, buildErrorEmbed } from '../lib/embeds';
+import { pinMessage } from '../lib/pins';
 import {
   COLORS,
   COLOR_BY_KEY,
@@ -623,10 +624,19 @@ async function handleCreateButton(
   try {
     const channel = interaction.channel;
     if (channel && 'send' in channel && typeof channel.send === 'function') {
-      await channel.send({
+      const recap = await channel.send({
         embeds: [buildAddedEmbed(inserted, parsed.humanReadable)],
         allowedMentions: { parse: [] },
       });
+      // Épingle le récap tant que le rappel est programmé (dés-épinglé au « Fait »).
+      const pinned = await pinMessage(recap);
+      if (pinned) {
+        try {
+          await updateReminder(inserted.id, { pin_message_id: recap.id });
+        } catch (err) {
+          logger.warn({ err, id: inserted.id }, 'failed to store pin_message_id');
+        }
+      }
     }
   } catch (err) {
     logger.warn({ err }, 'failed to post public reminder recap');

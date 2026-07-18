@@ -10,6 +10,7 @@ import { logger } from './logger';
 import { commandMap } from './commands';
 import { handleWizardInteraction, isWizardInteraction } from './commands/wizard';
 import { handleReminderComponent, isReminderComponent } from './commands/reminderActions';
+import { buildHelpEmbed } from './lib/embeds';
 import { Scheduler } from './scheduler/scheduler';
 import { listAllActive, updateNextRunAt } from './db/repository';
 import { computeNextCronRun } from './scheduler/scheduler';
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildMessages,
       GatewayIntentBits.DirectMessages,
     ],
   });
@@ -125,6 +127,22 @@ async function main(): Promise<void> {
         }
       }
       return;
+    }
+  });
+
+  // Mentionner le bot (@) affiche l'aide. Discord fournit le contenu/les mentions
+  // des messages qui mentionnent le bot, même sans l'intent MessageContent privilégié.
+  client.on(Events.MessageCreate, async (message) => {
+    try {
+      if (message.author.bot) return;
+      if (message.mentions.everyone) return;
+      if (!client.user || !message.mentions.users.has(client.user.id)) return;
+      await message.reply({
+        embeds: [buildHelpEmbed()],
+        allowedMentions: { repliedUser: false },
+      });
+    } catch (err) {
+      logger.warn({ err }, 'failed to reply to mention with help');
     }
   });
 

@@ -11,6 +11,7 @@ import {
 import { logger } from '../logger';
 import { buildReminderEmbed } from '../lib/embeds';
 import { escalationDelayMs } from '../lib/datetime';
+import { unpinReminder } from '../lib/pins';
 import {
   deleteReminder,
   getReminderById,
@@ -129,6 +130,7 @@ export async function fireReminder(
 
   // Ponctuel : soit on relance, soit on nettoie.
   if (!reminder.escalation_enabled) {
+    await unpinReminder(client, reminder);
     try {
       await deleteReminder(reminder.id);
     } catch (err) {
