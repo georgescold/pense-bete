@@ -68,6 +68,7 @@ npm run dev               # tsx watch
 |---|---|
 | `/rappel ajouter` | Ouvre le formulaire interactif pour créer un rappel |
 | `/rappel liste` | Liste vos rappels |
+| `/rappel recap` | Récap clair de tous vos rappels planifiés |
 | `/rappel calendrier` | Vue calendrier des rappels à venir |
 | `/rappel supprimer id:<…>` | Supprime |
 | `/rappel pause id:<…>` | Met en pause |

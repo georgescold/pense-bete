@@ -18,6 +18,7 @@ import {
   buildCalendarEmbed,
   buildErrorEmbed,
   buildListEmbed,
+  buildRecapEmbed,
   buildSuccessEmbed,
 } from '../lib/embeds';
 import { startWizard } from './wizard';
@@ -35,6 +36,17 @@ const data = new SlashCommandBuilder()
     s
       .setName('liste')
       .setDescription('Lister vos rappels actifs')
+      .addBooleanOption((o) =>
+        o
+          .setName('prive')
+          .setDescription('Visible uniquement par vous (défaut: non)')
+          .setRequired(false),
+      ),
+  )
+  .addSubcommand((s) =>
+    s
+      .setName('recap')
+      .setDescription('Récap clair de tous vos rappels planifiés')
       .addBooleanOption((o) =>
         o
           .setName('prive')
@@ -110,6 +122,9 @@ export const rappelCommand: Command = {
           break;
         case 'liste':
           await handleListe(interaction);
+          break;
+        case 'recap':
+          await handleRecap(interaction);
           break;
         case 'calendrier':
           await handleCalendrier(interaction);
@@ -192,6 +207,15 @@ async function handleListe(interaction: ChatInputCommandInteraction): Promise<vo
     } catch {
       /* ignore */
     }
+  });
+}
+
+async function handleRecap(interaction: ChatInputCommandInteraction): Promise<void> {
+  const prive = interaction.options.getBoolean('prive') ?? false;
+  const rows = await listRemindersByUser(interaction.user.id);
+  await interaction.reply({
+    embeds: [buildRecapEmbed(rows)],
+    ...(prive ? { flags: MessageFlags.Ephemeral } : {}),
   });
 }
 

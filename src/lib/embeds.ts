@@ -218,6 +218,70 @@ export function buildCalendarEmbed(rows: ReminderRow[], daysAhead: number): Embe
   return embed;
 }
 
+function jumpLink(r: ReminderRow): string | null {
+  if (!r.pin_message_id || !r.guild_id) return null;
+  return `https://discord.com/channels/${r.guild_id}/${r.channel_id}/${r.pin_message_id}`;
+}
+
+function recapLine(r: ReminderRow): string {
+  const unix = Math.floor(new Date(r.next_run_at).getTime() / 1000);
+  const icon = r.is_paused ? '⏸️' : r.schedule_type === 'recurring' ? '🔁' : '📅';
+  const parts = [`${icon} **#${r.id}** — ${truncate(r.message, 80)}`];
+  const meta: string[] = [`<t:${unix}:R> · <t:${unix}:f>`];
+  if (r.schedule_type === 'recurring') meta.push(`↻ ${truncate(r.raw_input, 40)}`);
+  else if (r.escalation_enabled) meta.push('🔔 relance ON');
+  if (r.target_user_id) meta.push(`→ <@${r.target_user_id}>`);
+  if (r.is_paused) meta.push('⏸️ en pause');
+  const link = jumpLink(r);
+  if (link) meta.push(`[📌 voir](${link})`);
+  parts.push(`   ${meta.join(' · ')}`);
+  return parts.join('\n');
+}
+
+export function buildRecapEmbed(rows: ReminderRow[]): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setColor(BLURPLE)
+    .setTitle(`📌 Récap des rappels planifiés (${rows.length})`)
+    .setFooter({ text: 'Heures en Europe/Paris · gère-les avec /rappel supprimer|pause|reprendre' });
+
+  if (rows.length === 0) {
+    embed.setDescription('Aucun rappel planifié. Utilise `/rappel ajouter` pour en créer un.');
+    return embed;
+  }
+
+  const ponctuels = rows
+    .filter((r) => r.schedule_type === 'once')
+    .sort((a, b) => new Date(a.next_run_at).getTime() - new Date(b.next_run_at).getTime());
+  const recurrents = rows
+    .filter((r) => r.schedule_type === 'recurring')
+    .sort((a, b) => new Date(a.next_run_at).getTime() - new Date(b.next_run_at).getTime());
+
+  const sections: string[] = [];
+  let shown = 0;
+  const CAP = 25;
+
+  const renderSection = (title: string, list: ReminderRow[]): void => {
+    if (list.length === 0) return;
+    const lines: string[] = [`__**${title}**__`];
+    for (const r of list) {
+      if (shown >= CAP) break;
+      lines.push(recapLine(r));
+      shown++;
+    }
+    sections.push(lines.join('\n'));
+  };
+
+  renderSection('📅 Ponctuels à venir', ponctuels);
+  renderSection('🔁 Récurrents', recurrents);
+
+  let desc = sections.join('\n\n');
+  if (rows.length > CAP) {
+    desc += `\n\n*… +${rows.length - CAP} autre(s) — utilise \`/rappel liste\` pour tout voir.*`;
+  }
+  embed.setDescription(truncate(desc, 4000));
+  return embed;
+}
+
 export function buildHelpEmbed(): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(BLURPLE)
@@ -232,6 +296,10 @@ export function buildHelpEmbed(): EmbedBuilder {
       {
         name: '📋 `/rappel liste`',
         value: 'Affiche tes rappels actifs (avec leur numéro `#id`).',
+      },
+      {
+        name: '📌 `/rappel recap`',
+        value: 'Récap clair de tous tes rappels planifiés (prochain déclenchement, relance, lien vers l\'épingle).',
       },
       {
         name: '📆 `/rappel calendrier`',
