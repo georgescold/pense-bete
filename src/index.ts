@@ -1,6 +1,5 @@
 import {
   Client,
-  EmbedBuilder,
   Events,
   GatewayIntentBits,
   Interaction,
@@ -10,13 +9,9 @@ import { config } from './config';
 import { logger } from './logger';
 import { commandMap } from './commands';
 import { handleWizardInteraction, isWizardInteraction } from './commands/wizard';
+import { handleReminderComponent, isReminderComponent } from './commands/reminderActions';
 import { Scheduler } from './scheduler/scheduler';
-import {
-  deleteReminder,
-  getReminderById,
-  listAllActive,
-  updateNextRunAt,
-} from './db/repository';
+import { listAllActive, updateNextRunAt } from './db/repository';
 import { computeNextCronRun } from './scheduler/scheduler';
 
 async function main(): Promise<void> {
@@ -110,80 +105,26 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (interaction.isButton()) {
-      const [namespace, action, idStr] = interaction.customId.split(':');
-      if (namespace !== 'rappel') return;
-      const id = Number.parseInt(idStr ?? '', 10);
-      if (!Number.isFinite(id)) return;
-
-      const r = await getReminderById(id);
-
-      if (action === 'done') {
-        // Les rappels ponctuels sont supprimés de la DB dès l'envoi (cf. fireReminder),
-        // donc r peut être null ici — c'est attendu. On vérifie l'ownership uniquement
-        // si le rappel existe encore.
-        if (r) {
-          const allowed =
-            r.user_id === interaction.user.id || r.target_user_id === interaction.user.id;
-          if (!allowed) {
-            await interaction.reply({
-              content: 'Ce rappel ne vous appartient pas.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
+    if (
+      (interaction.isButton() || interaction.isStringSelectMenu()) &&
+      isReminderComponent(interaction.customId)
+    ) {
+      try {
+        await handleReminderComponent(interaction, scheduler);
+      } catch (err) {
+        logger.error({ err, customId: interaction.customId }, 'reminder component failed');
+        const msg = err instanceof Error ? err.message : 'Erreur inconnue';
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          } else {
+            await interaction.followUp({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
           }
-          try {
-            await deleteReminder(id);
-          } catch {
-            /* déjà supprimé */
-          }
-          scheduler.unschedule(id);
+        } catch {
+          /* ignore */
         }
-
-        const originalEmbed = interaction.message.embeds[0];
-        const reminderText = originalEmbed?.description ?? r?.message ?? '*(rappel)*';
-        const originalColor = originalEmbed?.color ?? r?.color ?? 0x57f287;
-        const validatedAt = Math.floor(Date.now() / 1000);
-
-        const doneEmbed = new EmbedBuilder()
-          .setColor(originalColor)
-          .setTitle('✅ Rappel validé')
-          .setDescription(reminderText)
-          .addFields(
-            { name: 'Validé par', value: `<@${interaction.user.id}>`, inline: true },
-            { name: 'Validé le', value: `<t:${validatedAt}:F>`, inline: true },
-          )
-          .setFooter({ text: `Rappel #${id} · terminé` });
-
-        await interaction.update({
-          content: '',
-          embeds: [doneEmbed],
-          components: [],
-          allowedMentions: { parse: [] },
-        });
-        return;
       }
-
-      const allowed =
-        r && (r.user_id === interaction.user.id || r.target_user_id === interaction.user.id);
-      if (!r || !allowed) {
-        await interaction.reply({
-          content: 'Ce rappel ne vous appartient pas.',
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-
-      if (action === 'skip' && r.schedule_type === 'recurring' && r.cron_expression) {
-        const next = computeNextCronRun(r.cron_expression, new Date(Date.now() + 60_000));
-        await updateNextRunAt(id, next);
-        await interaction.update({
-          content: `⏭️ Prochaine occurrence prévue : ${next.toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}`,
-          embeds: [],
-          components: [],
-        });
-        return;
-      }
+      return;
     }
   });
 

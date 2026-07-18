@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 
 export type ScheduleType = 'once' | 'recurring';
+export type ReminderStatus = 'scheduled' | 'awaiting_ack' | 'done';
 
 export interface ReminderRow {
   id: number;
@@ -17,6 +18,9 @@ export interface ReminderRow {
   is_last_day_of_month: boolean;
   color: number;
   target_user_id: string | null;
+  escalation_enabled: boolean;
+  escalation_step: number;
+  status: ReminderStatus;
   created_at: string;
 }
 
@@ -33,7 +37,18 @@ export interface NewReminder {
   is_last_day_of_month: boolean;
   color: number;
   target_user_id: string | null;
+  escalation_enabled: boolean;
 }
+
+export type ReminderPatch = Partial<{
+  next_run_at: string;
+  run_at: string | null;
+  status: ReminderStatus;
+  escalation_step: number;
+  escalation_enabled: boolean;
+  is_paused: boolean;
+  raw_input: string;
+}>;
 
 const TABLE = 'reminders';
 
@@ -87,4 +102,18 @@ export async function updateNextRunAt(id: number, nextRunAt: Date): Promise<void
     .update({ next_run_at: nextRunAt.toISOString() })
     .eq('id', id);
   if (error) throw new Error(`updateNextRunAt: ${error.message}`);
+}
+
+export async function updateReminder(
+  id: number,
+  patch: ReminderPatch,
+): Promise<ReminderRow | null> {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`updateReminder: ${error.message}`);
+  return (data as ReminderRow | null) ?? null;
 }

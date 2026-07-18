@@ -64,11 +64,34 @@ npm run dev               # tsx watch
 
 | Commande | Description |
 |---|---|
-| `/rappel ajouter texte:<…> quand:<…>` | Crée un rappel |
+| `/rappel ajouter` | Ouvre le formulaire interactif pour créer un rappel |
 | `/rappel liste` | Liste vos rappels |
+| `/rappel calendrier` | Vue calendrier des rappels à venir |
 | `/rappel supprimer id:<…>` | Supprime |
 | `/rappel pause id:<…>` | Met en pause |
 | `/rappel reprendre id:<…>` | Reprend |
+
+## Date & heure précises (menus déroulants)
+
+Dans `/rappel ajouter`, l'option **« 📅 Date & heure précises… »** du menu *Quand* ouvre
+une cascade de menus déroulants : **jour** (aujourd'hui → +24 jours) → **heure** →
+**minutes** (pas de 5). Un aperçu de la date finale s'affiche avant de valider.
+Pour les dates au-delà de 24 jours ou les récurrences, utilise l'option
+*« 📝 Personnalisé »* (texte libre).
+
+## Relance ("réveil") — rappels non validés
+
+Chaque rappel **ponctuel** relance automatiquement tant que tu n'as pas cliqué
+**✅ Fait**, selon l'échelle : **4 h → 6 h → 1 j → 3 j → 1 semaine**, puis **chaque
+semaine** indéfiniment. Sur chaque message de rappel :
+
+- **✅ Fait** — valide et arrête définitivement les relances.
+- **😴 Reporter** — repousse à un moment choisi (30 min, 1 h, 3 h, ce soir, demain 9 h, 1 semaine) et repart de zéro dans l'échelle.
+- **✏️ Redéfinir** — replanifie le rappel à un nouveau jour/heure (cascade).
+
+La relance est **activée par défaut** ; un bouton **🔔 Relance : ON/OFF** dans le
+formulaire permet de la désactiver par rappel. Les rappels récurrents ne sont pas
+concernés (ils se redéclenchent d'eux-mêmes).
 
 ### Exemples d'expressions reconnues
 

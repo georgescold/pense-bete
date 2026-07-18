@@ -3,6 +3,7 @@ import parser from 'cron-parser';
 import type { ReminderRow } from '../db/repository';
 import { config } from '../config';
 import { isLastDayOfMonthInParis } from '../scheduler/scheduler';
+import { ESCALATION_SUMMARY } from './datetime';
 import { formatFrenchDate, truncate } from './format';
 
 export const BLURPLE = 0x5865f2;
@@ -32,6 +33,14 @@ export function buildAddedEmbed(r: ReminderRow, humanReadable: string): EmbedBui
       { name: 'Message', value: truncate(r.message, 1000) },
     )
     .setTimestamp();
+  if (r.schedule_type === 'once') {
+    embed.addFields({
+      name: '🔔 Relance',
+      value: r.escalation_enabled
+        ? `Activée — relance tant que non validé (${ESCALATION_SUMMARY})`
+        : 'Désactivée',
+    });
+  }
   return embed;
 }
 
@@ -65,13 +74,19 @@ export function buildListEmbed(
   return embed;
 }
 
-export function buildReminderEmbed(r: ReminderRow): EmbedBuilder {
-  return new EmbedBuilder()
+export function buildReminderEmbed(r: ReminderRow, isEscalation = false): EmbedBuilder {
+  const embed = new EmbedBuilder()
     .setColor(r.color)
-    .setTitle('🔔 Rappel')
     .setDescription(r.message)
-    .setFooter({ text: `ID: ${r.id}` })
     .setTimestamp();
+  if (isEscalation) {
+    embed
+      .setTitle(`🔁 Relance n°${r.escalation_step} — rappel non validé`)
+      .setFooter({ text: `ID: ${r.id} · clique « Fait » pour arrêter les relances` });
+  } else {
+    embed.setTitle('🔔 Rappel').setFooter({ text: `ID: ${r.id}` });
+  }
+  return embed;
 }
 
 interface Occurrence {
