@@ -73,7 +73,7 @@ export async function refreshPlanMessages(client: Client, plan: DayPlanRow): Pro
       const msg = await channel.messages.fetch(plan.prep_message_id);
       await msg.edit({
         embeds: [buildPrepEmbed(plan, tasks, pending)],
-        components: plan.status === 'draft' ? buildPrepComponents(plan, pending) : [],
+        components: plan.status === 'draft' ? buildPrepComponents(plan, tasks, pending) : [],
       });
     } catch (err) {
       logger.warn({ err, id: plan.id }, 'message de preparation introuvable');
@@ -110,7 +110,7 @@ export async function runPrepJob(client: Client): Promise<void> {
   const sent = await channel.send({
     content: `${userMention(userId())} on prépare **${formatPlanDate(tomorrow)}** ?`,
     embeds: [buildPrepEmbed(plan, tasks, pending)],
-    components: buildPrepComponents(plan, pending),
+    components: buildPrepComponents(plan, tasks, pending),
     allowedMentions: { users: [userId()] },
   });
   await updatePlan(plan.id, { prep_message_id: sent.id, status: 'draft' });

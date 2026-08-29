@@ -9,12 +9,18 @@ import {
 import type { DailyTaskRow, DayPlanRow } from '../db/dailyRepository';
 import { truncate } from '../lib/format';
 
-const COLOR_PREP = 0xf1c40f; // ambre : on prépare
+const COLOR_PREP = 0xfaa61a; // ambre : on prépare
 const COLOR_BOARD = 0x5865f2; // bleu : journée en cours
-const COLOR_CLOSED = 0x2ecc71; // vert : journée clôturée
+const COLOR_DONE = 0x57f287; // vert : tout est fait
+const COLOR_CLOSED = 0x4f545c; // gris : journée close
 
-/** Un menu déroulant Discord accepte au maximum 25 options. */
+/** Un menu déroulant Discord accepte 25 options ; une ligne accueille 5 boutons. */
 const MAX_OPTIONS = 25;
+const BUTTONS_PER_ROW = 5;
+/** 4 lignes de boutons + 1 ligne d'actions = les 5 lignes autorisées. */
+const MAX_TASK_BUTTONS = 20;
+/** Au-delà, on garde 3 lignes de boutons et on bascule le reste dans un menu. */
+const BUTTONS_BEFORE_SELECT = 15;
 
 /** 'YYYY-MM-DD' → 'samedi 30 août 2026' */
 export function formatPlanDate(planDate: string): string {
@@ -29,18 +35,28 @@ export function formatPlanDate(planDate: string): string {
   });
 }
 
-function taskLine(task: DailyTaskRow, index: number): string {
-  const box = task.is_done ? '☑' : '☐';
-  const label = task.is_done ? `~~${task.label}~~` : task.label;
-  const tag = task.carried_over ? ' *(reportée)*' : '';
-  return `${box} **${index + 1}.** ${label}${tag}`;
+/** Première lettre en majuscule : 'samedi 30 août' → 'Samedi 30 août'. */
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function progressBar(done: number, total: number): string {
-  if (total === 0) return '';
-  const slots = 12;
-  const filled = Math.round((done / total) * slots);
-  return `\`${'█'.repeat(filled)}${'░'.repeat(slots - filled)}\` ${done}/${total}`;
+  const slots = 10;
+  const filled = total === 0 ? 0 : Math.round((done / total) * slots);
+  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+  return `${'▰'.repeat(filled)}${'▱'.repeat(slots - filled)}  **${done}/${total}** · ${pct} %`;
+}
+
+function taskLines(tasks: DailyTaskRow[]): string {
+  return tasks
+    .map((t, i) => {
+      const num = `\`${String(i + 1).padStart(2, ' ')}\``;
+      const carried = t.carried_over ? ' ↩︎' : '';
+      return t.is_done
+        ? `${num} ✅ ~~${t.label}~~${carried}`
+        : `${num} ⬜ **${t.label}**${carried}`;
+    })
+    .join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -54,48 +70,49 @@ export function buildPrepEmbed(
 ): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setColor(COLOR_PREP)
-    .setTitle(`📝 Demain — ${formatPlanDate(plan.plan_date)}`)
+    .setAuthor({ name: 'Préparation de demain' })
+    .setTitle(`📝 ${capitalize(formatPlanDate(plan.plan_date))}`)
     .setDescription(
       tasks.length > 0
-        ? truncate(tasks.map((t, i) => taskLine(t, i)).join('\n'), 4000)
-        : '_Aucune tâche pour l’instant. Clique sur « ➕ Ajouter une tâche »._',
+        ? truncate(taskLines(tasks), 3800)
+        : '*Ta liste est vide.*\nAjoute tes tâches une par une avec **➕ Ajouter une tâche**.',
     );
 
   if (pending.length > 0) {
     embed.addFields({
-      name: `⏭️ Non terminé aujourd’hui (${pending.length})`,
+      name: `↩︎ Pas terminé aujourd’hui — ${pending.length} tâche(s)`,
       value: truncate(pending.map((t) => `• ${t.label}`).join('\n'), 1000),
     });
   }
 
-  embed.setFooter({ text: 'Ta liste sera présentée demain à 7h, prête à cocher.' });
+  embed.setFooter({ text: 'Présentée demain à 7h, prête à cocher' });
   return embed;
 }
 
 export function buildPrepComponents(
   plan: DayPlanRow,
+  tasks: DailyTaskRow[],
   pending: DailyTaskRow[],
 ): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
   if (pending.length > 0) {
     const options = pending.slice(0, MAX_OPTIONS);
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(`daily:carry:${plan.id}`)
-      .setPlaceholder('⏭️ Reporter à demain…')
-      .setMinValues(1)
-      .setMaxValues(options.length)
-      .addOptions(
-        options.map((t) =>
-          new StringSelectMenuOptionBuilder()
-            .setValue(String(t.id))
-            .setLabel(truncate(t.label, 100)),
-        ),
-      );
     rows.push(
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select) as ActionRowBuilder<
-        ButtonBuilder | StringSelectMenuBuilder
-      >,
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`daily:carry:${plan.id}`)
+          .setPlaceholder('↩︎ Reporter à demain…')
+          .setMinValues(1)
+          .setMaxValues(options.length)
+          .addOptions(
+            options.map((t) =>
+              new StringSelectMenuOptionBuilder()
+                .setValue(String(t.id))
+                .setLabel(truncate(t.label, 100)),
+            ),
+          ),
+      ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
     );
   }
 
@@ -110,12 +127,8 @@ export function buildPrepComponents(
         .setCustomId(`daily:undo:${plan.id}`)
         .setLabel('Retirer la dernière')
         .setEmoji('↩️')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`daily:ready:${plan.id}`)
-        .setLabel('Ma liste est prête')
-        .setEmoji('✅')
-        .setStyle(ButtonStyle.Success),
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(tasks.length === 0),
     ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
   );
   return rows;
@@ -128,20 +141,29 @@ export function buildPrepComponents(
 export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedBuilder {
   const done = tasks.filter((t) => t.is_done).length;
   const closed = plan.status === 'closed';
-  const embed = new EmbedBuilder()
-    .setColor(closed ? COLOR_CLOSED : COLOR_BOARD)
-    .setTitle(`${closed ? '🏁' : '☀️'} ${formatPlanDate(plan.plan_date)}`)
-    .setDescription(
-      tasks.length > 0
-        ? truncate(tasks.map((t, i) => taskLine(t, i)).join('\n'), 4000)
-        : '_Aucune tâche prévue pour aujourd’hui._',
-    );
+  const allDone = tasks.length > 0 && done === tasks.length;
 
-  if (tasks.length > 0) {
-    embed.addFields({ name: 'Avancement', value: progressBar(done, tasks.length) });
+  const embed = new EmbedBuilder()
+    .setColor(closed ? COLOR_CLOSED : allDone ? COLOR_DONE : COLOR_BOARD)
+    .setAuthor({ name: closed ? 'Journée archivée' : 'Ta journée' })
+    .setTitle(`${closed ? '🏁' : allDone ? '🎉' : '☀️'} ${capitalize(formatPlanDate(plan.plan_date))}`);
+
+  if (tasks.length === 0) {
+    embed.setDescription(
+      '*Aucune tâche pour aujourd’hui.*\nAjoute-en avec **➕ Ajouter une tâche**.',
+    );
+  } else {
+    embed.setDescription(
+      `${progressBar(done, tasks.length)}\n​\n${truncate(taskLines(tasks), 3700)}`,
+    );
   }
+
   embed.setFooter({
-    text: closed ? 'Journée clôturée et archivée.' : 'Coche tes tâches au fil de la journée.',
+    text: closed
+      ? 'Journée close et archivée dans le Sheet'
+      : allDone
+        ? 'Tout est fait, bravo'
+        : 'Clique sur un numéro pour cocher',
   });
   return embed;
 }
@@ -153,25 +175,44 @@ export function buildBoardComponents(
   if (plan.status === 'closed') return [];
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
-  const options = tasks.slice(0, MAX_OPTIONS);
-  if (options.length > 0) {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(`daily:toggle:${plan.id}`)
-      .setPlaceholder('✅ Cocher / décocher une tâche…')
-      .setMinValues(1)
-      .setMaxValues(options.length)
-      .addOptions(
-        options.map((t) =>
-          new StringSelectMenuOptionBuilder()
-            .setValue(String(t.id))
-            .setLabel(truncate(t.label, 100))
-            .setEmoji(t.is_done ? '☑️' : '⬜'),
-        ),
-      );
+  // Un bouton par tâche : cocher se fait en un seul clic.
+  const overflow = tasks.length > MAX_TASK_BUTTONS;
+  const withButtons = tasks.slice(0, overflow ? BUTTONS_BEFORE_SELECT : MAX_TASK_BUTTONS);
+
+  for (let i = 0; i < withButtons.length; i += BUTTONS_PER_ROW) {
+    const slice = withButtons.slice(i, i + BUTTONS_PER_ROW);
     rows.push(
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select) as ActionRowBuilder<
-        ButtonBuilder | StringSelectMenuBuilder
-      >,
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        slice.map((t, j) =>
+          new ButtonBuilder()
+            .setCustomId(`daily:toggle:${plan.id}:${t.id}`)
+            .setLabel(String(i + j + 1))
+            .setEmoji(t.is_done ? '✅' : '⬜')
+            .setStyle(t.is_done ? ButtonStyle.Success : ButtonStyle.Secondary),
+        ),
+      ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
+    );
+  }
+
+  // Au-delà de 20 tâches les boutons ne tiennent plus : le reste passe en menu.
+  if (overflow) {
+    const rest = tasks.slice(BUTTONS_BEFORE_SELECT, BUTTONS_BEFORE_SELECT + MAX_OPTIONS);
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`daily:pick:${plan.id}`)
+          .setPlaceholder(`Cocher une tâche ${BUTTONS_BEFORE_SELECT + 1}+…`)
+          .setMinValues(1)
+          .setMaxValues(rest.length)
+          .addOptions(
+            rest.map((t, i) =>
+              new StringSelectMenuOptionBuilder()
+                .setValue(String(t.id))
+                .setLabel(truncate(`${BUTTONS_BEFORE_SELECT + i + 1}. ${t.label}`, 100))
+                .setEmoji(t.is_done ? '✅' : '⬜'),
+            ),
+          ),
+      ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
     );
   }
 
@@ -179,14 +220,20 @@ export function buildBoardComponents(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`daily:add:${plan.id}`)
-        .setLabel('Ajouter une tâche')
+        .setLabel('Ajouter')
         .setEmoji('➕')
-        .setStyle(ButtonStyle.Secondary),
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`daily:undo:${plan.id}`)
+        .setLabel('Retirer la dernière')
+        .setEmoji('↩️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(tasks.length === 0),
       new ButtonBuilder()
         .setCustomId(`daily:close:${plan.id}`)
-        .setLabel('Clôturer la journée')
+        .setLabel('Clôturer')
         .setEmoji('🏁')
-        .setStyle(ButtonStyle.Success),
+        .setStyle(ButtonStyle.Danger),
     ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
   );
   return rows;

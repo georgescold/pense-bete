@@ -51,32 +51,29 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
       return;
     }
     const tasks = await listTasks(plan.id);
-    await interaction.reply({
-      embeds: [buildBoardEmbed(plan, tasks)],
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply({ embeds: [buildBoardEmbed(plan, tasks)] });
     return;
   }
 
+  // Le résultat de ces commandes est le message public posté dans le salon :
+  // on supprime l'accusé de réception pour ne pas polluer la conversation.
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   if (sub === 'demain') {
     await runPrepJob(interaction.client);
-    await interaction.editReply('📝 Préparation de demain publiée dans le salon.');
+    await interaction.deleteReply();
     return;
   }
 
   if (sub === 'aujourdhui') {
     await runBoardJob(interaction.client);
-    await interaction.editReply(
-      '☀️ Journée d’aujourd’hui ouverte dans le salon — ajoute tes tâches avec ➕.',
-    );
+    await interaction.deleteReply();
     return;
   }
 
   if (sub === 'archiver') {
     await syncPendingPlans();
-    await interaction.editReply('📊 Archivage déclenché (voir les logs pour le détail).');
+    await interaction.editReply('📊 Archivage déclenché.');
     return;
   }
 }
