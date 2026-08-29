@@ -47,14 +47,19 @@ function progressBar(done: number, total: number): string {
   return `${'▰'.repeat(filled)}${'▱'.repeat(slots - filled)}  **${done}/${total}** · ${pct} %`;
 }
 
+/**
+ * Pas d'emoji de case : ⬜ et ✅ sont rendus en pleine chasse par Discord et
+ * forment un pavé de couleur disgracieux. Le numéro en `code` sert de repère
+ * vers le bouton correspondant, le barré suffit à marquer ce qui est fait.
+ */
 function taskLines(tasks: DailyTaskRow[]): string {
   return tasks
     .map((t, i) => {
       const num = `\`${String(i + 1).padStart(2, ' ')}\``;
-      const carried = t.carried_over ? ' ↩︎' : '';
+      const carried = t.carried_over ? '  ↩︎' : '';
       return t.is_done
-        ? `${num} ✅ ~~${t.label}~~${carried}`
-        : `${num} ⬜ **${t.label}**${carried}`;
+        ? `${num}  ~~${t.label}~~${carried}`
+        : `${num}  **${t.label}**${carried}`;
     })
     .join('\n');
 }
@@ -186,8 +191,9 @@ export function buildBoardComponents(
         slice.map((t, j) =>
           new ButtonBuilder()
             .setCustomId(`daily:toggle:${plan.id}:${t.id}`)
-            .setLabel(String(i + j + 1))
-            .setEmoji(t.is_done ? '✅' : '⬜')
+            // La couleur porte l'état : vert = fait, gris = à faire. Un emoji
+            // de case ajouterait un bloc blanc sans rien apprendre de plus.
+            .setLabel(t.is_done ? `✓ ${i + j + 1}` : String(i + j + 1))
             .setStyle(t.is_done ? ButtonStyle.Success : ButtonStyle.Secondary),
         ),
       ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
@@ -208,8 +214,12 @@ export function buildBoardComponents(
             rest.map((t, i) =>
               new StringSelectMenuOptionBuilder()
                 .setValue(String(t.id))
-                .setLabel(truncate(`${BUTTONS_BEFORE_SELECT + i + 1}. ${t.label}`, 100))
-                .setEmoji(t.is_done ? '✅' : '⬜'),
+                .setLabel(
+                  truncate(
+                    `${t.is_done ? '✓ ' : ''}${BUTTONS_BEFORE_SELECT + i + 1}. ${t.label}`,
+                    100,
+                  ),
+                ),
             ),
           ),
       ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
