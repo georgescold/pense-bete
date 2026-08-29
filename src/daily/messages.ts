@@ -95,17 +95,24 @@ const CLOSE_GOOD = [
   '💪 **{done}/{total}** de bouclé, on archive.',
 ];
 
+// En dessous de la moitié, le ton pique. En dessous de tout, il mord.
 const CLOSE_PARTIAL = [
-  '📌 **{done}/{total}** aujourd’hui. Le reste attendra.',
-  '🤏 **{done}/{total}** — journée en demi-teinte, ça arrive.',
-  '📋 **{done}/{total}** de fait. On archive et on repart demain.',
-  '⏳ **{done}/{total}**. Le reliquat est reportable ce soir.',
+  '😒 **{done}/{total}**. Tu appelles ça une journée de travail ?',
+  '🥱 **{done}/{total}** — t’as fait le minimum syndical, bravo.',
+  '📉 **{done}/{total}**. Moitié de journée, moitié d’effort.',
+  '🫤 **{done}/{total}**. T’as commencé fort et t’as lâché, comme d’hab.',
+  '🤏 **{done}/{total}**. C’est maigre. Très maigre.',
+  '⌛ **{done}/{total}** — le reste, c’est pour la Saint-Glinglin ?',
 ];
 
 const CLOSE_NONE = [
-  '📭 Rien de coché sur **{total}**. Journée off, ou ça a dérapé ?',
-  '🫥 **0/{total}** aujourd’hui. On repart demain.',
-  '📉 Aucune tâche cochée sur **{total}**. Ça arrive.',
+  '🤡 **0/{total}**. T’as rien branlé de la journée. Zéro. Nada.',
+  '💩 **0/{total}**. Journée intégralement gâchée, félicitations champion.',
+  '🗑️ **0/{total}** — t’as réussi l’exploit de ne rien faire du tout.',
+  '😤 **0/{total}**. T’avais {total} trucs à faire. {total}. T’en as fait AUCUN.',
+  '📵 **0/{total}**. T’as passé la journée à scroller, avoue.',
+  '🥀 **0/{total}**. Pathétique. Demain tu te bouges.',
+  '🫵 **0/{total}**. C’est toi le problème, pas la liste.',
 ];
 
 const CLOSE_EMPTY = [
@@ -125,5 +132,6 @@ export function closingLine(done: number, total: number): string {
         : ratio > 0
           ? CLOSE_PARTIAL
           : CLOSE_NONE;
-  return pick(variants).replace('{done}', String(done)).replace('{total}', String(total));
+  // replaceAll : certaines variantes répètent {total} dans la même phrase.
+  return pick(variants).replaceAll('{done}', String(done)).replaceAll('{total}', String(total));
 }

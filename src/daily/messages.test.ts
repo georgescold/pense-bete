@@ -45,6 +45,13 @@ describe('closingLine', () => {
     expect(lines.every((l) => !l.includes('parfaite') && !l.includes('Carton'))).toBe(true);
   });
 
+  it('substitue toutes les occurrences, même répétées dans une phrase', () => {
+    for (let i = 0; i < 80; i += 1) {
+      expect(closingLine(0, 7)).not.toContain('{total}');
+      expect(closingLine(2, 7)).not.toContain('{total}');
+    }
+  });
+
   it('gère une journée sans aucune tâche', () => {
     const line = closingLine(0, 0);
     expect(line).not.toContain('0/0');
