@@ -9,6 +9,7 @@ import {
   updatePlan,
   type DailyTaskRow,
   type DayPlanRow,
+  type DayType,
 } from '../db/dailyRepository';
 import { parisDateValue } from '../lib/datetime';
 import { appendRows, isSheetsConfigured } from '../lib/sheets';
@@ -40,6 +41,19 @@ export function previousPlanDate(planDate: string): string {
   const mm = String(prev.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(prev.getUTCDate()).padStart(2, '0');
   return `${prev.getUTCFullYear()}-${mm}-${dd}`;
+}
+
+/**
+ * Tranche le type d'une journée au moment de l'ouvrir.
+ *
+ * Sans réponse le soir (`undecided`) et sans aucune tâche posée, on considère
+ * que c'est du repos : le bot ne réclame pas de comptes sur une journée qui
+ * n'a jamais été cadrée. En revanche, des tâches posées sans choix explicite
+ * valent journée de travail.
+ */
+export function resolveDayType(current: DayType, taskCount: number): DayType {
+  if (current !== 'undecided') return current;
+  return taskCount === 0 ? 'rest' : 'work';
 }
 
 async function fetchChannel(client: Client): Promise<SendableChannels | null> {
@@ -140,10 +154,16 @@ export async function runBoardJob(client: Client): Promise<void> {
   const guildId = (channel as { guildId?: string }).guildId ?? null;
   const plan = await ensurePlan(userId(), channelId(), guildId, today);
   const tasks = await listTasks(plan.id);
-  const active = (await updatePlan(plan.id, { status: 'active' })) ?? {
-    ...plan,
-    status: 'active' as const,
-  };
+
+  const resolvedType = resolveDayType(plan.day_type, tasks.length);
+  if (resolvedType !== plan.day_type) {
+    logger.info({ id: plan.id, resolvedType }, 'type de journee deduit faute de reponse');
+  }
+
+  const active = (await updatePlan(plan.id, {
+    status: 'active',
+    day_type: resolvedType,
+  })) ?? { ...plan, status: 'active' as const, day_type: resolvedType };
 
   const sent = await channel.send({
     content: `${userMention(userId())} ${boardIntro(tasks.length, active.day_type === 'rest')}`,

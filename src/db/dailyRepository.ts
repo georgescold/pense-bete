@@ -1,7 +1,11 @@
 import { supabase } from './supabase';
 
 export type PlanStatus = 'draft' | 'active' | 'closed';
-export type DayType = 'work' | 'rest';
+/**
+ * 'undecided' = aucune réponse le soir. Le job de 7h le tranche : sans tâche
+ * ni choix explicite, la journée bascule en repos.
+ */
+export type DayType = 'work' | 'rest' | 'undecided';
 
 export interface DayPlanRow {
   id: number;

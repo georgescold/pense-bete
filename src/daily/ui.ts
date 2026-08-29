@@ -85,7 +85,7 @@ export function buildPrepEmbed(
         ? '*Journée de repos.* Rien d’obligatoire — tu peux quand même ajouter des tâches avec **➕**.'
         : tasks.length > 0
           ? truncate(taskLines(tasks), 3800)
-          : '*Ta liste est vide.*\nAjoute tes tâches une par une avec **➕ Ajouter une tâche**.',
+          : '*Ta liste est vide.*\nAjoute tes tâches avec **➕**, ou choisis un type de journée ci-dessous.',
     );
 
   if (pending.length > 0) {
@@ -98,7 +98,9 @@ export function buildPrepEmbed(
   embed.setFooter({
     text: rest
       ? 'Repos — rien ne te sera reproché demain'
-      : 'Présentée demain à 7h, prête à cocher',
+      : plan.day_type === 'undecided' && tasks.length === 0
+        ? 'Sans réponse de ta part, demain sera compté comme du repos'
+        : 'Présentée demain à 7h, prête à cocher',
   });
   return embed;
 }
@@ -114,12 +116,13 @@ export function buildPrepComponents(
   // Travail ou repos : le choix conditionne tout le reste de la journée.
   rows.push(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
+      // Tant que rien n'est choisi, aucun des deux n'est allumé.
       new ButtonBuilder()
         .setCustomId(`daily:type:${plan.id}:work`)
         .setLabel('Journée de travail')
         .setEmoji('💼')
-        .setStyle(rest ? ButtonStyle.Secondary : ButtonStyle.Primary)
-        .setDisabled(!rest),
+        .setStyle(plan.day_type === 'work' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+        .setDisabled(plan.day_type === 'work'),
       new ButtonBuilder()
         .setCustomId(`daily:type:${plan.id}:rest`)
         .setLabel('Journée de repos')

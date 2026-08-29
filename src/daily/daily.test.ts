@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { previousPlanDate } from './service';
+import { previousPlanDate, resolveDayType } from './service';
 import { formatPlanDate } from './ui';
 
 describe('previousPlanDate', () => {
@@ -41,5 +41,21 @@ describe('formatPlanDate', () => {
     // jour précédent dans les fuseaux négatifs. On ancre donc à midi.
     expect(formatPlanDate('2026-01-01')).toBe('jeudi 1 janvier 2026');
     expect(formatPlanDate('2026-12-31')).toBe('jeudi 31 décembre 2026');
+  });
+});
+
+describe('resolveDayType', () => {
+  it('sans réponse et sans tâche : repos', () => {
+    expect(resolveDayType('undecided', 0)).toBe('rest');
+  });
+
+  it('sans réponse mais avec des tâches : travail', () => {
+    expect(resolveDayType('undecided', 1)).toBe('work');
+    expect(resolveDayType('undecided', 8)).toBe('work');
+  });
+
+  it('un choix explicite est toujours respecté', () => {
+    expect(resolveDayType('work', 0)).toBe('work');
+    expect(resolveDayType('rest', 5)).toBe('rest');
   });
 });
