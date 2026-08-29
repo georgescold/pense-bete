@@ -15,10 +15,12 @@ const data = new SlashCommandBuilder()
   .setDescription('Tes journées de travail (liste du soir, checklist du matin)')
   .setDMPermission(false)
   .addSubcommand((s) =>
-    s.setName('preparer').setDescription('Préparer maintenant la liste de demain (comme à 18h)'),
+    s
+      .setName('aujourdhui')
+      .setDescription('Ouvrir la journée d’aujourd’hui et y ajouter des tâches'),
   )
   .addSubcommand((s) =>
-    s.setName('afficher').setDescription('Republier la checklist du jour (comme à 7h)'),
+    s.setName('demain').setDescription('Préparer la liste de demain (comme le message de 18h)'),
   )
   .addSubcommand((s) =>
     s.setName('recap').setDescription('Voir l’avancement de la journée en cours'),
@@ -58,15 +60,17 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  if (sub === 'preparer') {
+  if (sub === 'demain') {
     await runPrepJob(interaction.client);
     await interaction.editReply('📝 Préparation de demain publiée dans le salon.');
     return;
   }
 
-  if (sub === 'afficher') {
+  if (sub === 'aujourdhui') {
     await runBoardJob(interaction.client);
-    await interaction.editReply('☀️ Checklist du jour publiée dans le salon.');
+    await interaction.editReply(
+      '☀️ Journée d’aujourd’hui ouverte dans le salon — ajoute tes tâches avec ➕.',
+    );
     return;
   }
 
