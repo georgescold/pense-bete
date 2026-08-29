@@ -40,15 +40,11 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/**
- * Barre pleine (█) sur fond tramé (░), dans un bloc `code` pour rester en
- * chasse fixe. Les cases creuses type ▱ donnaient un rendu vide et transparent.
- */
 function progressBar(done: number, total: number): string {
-  const slots = 12;
+  const slots = 10;
   const filled = total === 0 ? 0 : Math.round((done / total) * slots);
   const pct = total === 0 ? 0 : Math.round((done / total) * 100);
-  return `\`${'█'.repeat(filled)}${'░'.repeat(slots - filled)}\`  **${done}/${total}** · ${pct} %`;
+  return `${'▰'.repeat(filled)}${'▱'.repeat(slots - filled)}  **${done}/${total}** · ${pct} %`;
 }
 
 /**
@@ -177,6 +173,17 @@ export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedB
   return embed;
 }
 
+/**
+ * Jusqu'à 5 tâches, le bouton porte le libellé : il remplit sa largeur et se
+ * lit sans faire l'aller-retour avec la liste. Au-delà, une ligne complète de
+ * libellés serait illisible, on retombe sur le numéro.
+ */
+function taskButtonLabel(task: DailyTaskRow, position: number, total: number): string {
+  const mark = task.is_done ? '✓ ' : '';
+  if (total <= BUTTONS_PER_ROW) return `${mark}${truncate(task.label, 30)}`;
+  return `${mark}${position}`;
+}
+
 export function buildBoardComponents(
   plan: DayPlanRow,
   tasks: DailyTaskRow[],
@@ -195,10 +202,10 @@ export function buildBoardComponents(
         slice.map((t, j) =>
           new ButtonBuilder()
             .setCustomId(`daily:toggle:${plan.id}:${t.id}`)
-            // La couleur porte l'état : vert = fait, gris = à faire. Un emoji
-            // de case ajouterait un bloc blanc sans rien apprendre de plus.
-            .setLabel(t.is_done ? `✓ ${i + j + 1}` : String(i + j + 1))
-            .setStyle(t.is_done ? ButtonStyle.Success : ButtonStyle.Secondary),
+            // Boutons pleins des deux côtés (bleu à faire / vert fait) : le gris
+            // Secondary rendait des cases quasi transparentes et vides.
+            .setLabel(taskButtonLabel(t, i + j + 1, withButtons.length))
+            .setStyle(t.is_done ? ButtonStyle.Success : ButtonStyle.Primary),
         ),
       ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
     );
@@ -236,7 +243,8 @@ export function buildBoardComponents(
         .setCustomId(`daily:add:${plan.id}`)
         .setLabel('Ajouter')
         .setEmoji('➕')
-        .setStyle(ButtonStyle.Primary),
+        // Secondary pour ne pas rivaliser avec les boutons de tâches.
+        .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`daily:undo:${plan.id}`)
         .setLabel('Retirer la dernière')
