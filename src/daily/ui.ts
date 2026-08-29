@@ -82,13 +82,13 @@ export function buildPrepEmbed(
     .setTitle(`${rest ? '🛌' : '📝'} ${capitalize(formatPlanDate(plan.plan_date))}`)
     .setDescription(
       rest && tasks.length === 0
-        ? '*Journée de repos.* Rien à préparer — le bot ne te demandera rien demain.'
+        ? '*Journée de repos.* Rien d’obligatoire — tu peux quand même ajouter des tâches avec **➕**.'
         : tasks.length > 0
           ? truncate(taskLines(tasks), 3800)
           : '*Ta liste est vide.*\nAjoute tes tâches une par une avec **➕ Ajouter une tâche**.',
     );
 
-  if (pending.length > 0 && !rest) {
+  if (pending.length > 0) {
     embed.addFields({
       name: `↩︎ Pas terminé aujourd’hui — ${pending.length} tâche(s)`,
       value: truncate(pending.map((t) => `• ${t.label}`).join('\n'), 1000),
@@ -96,7 +96,9 @@ export function buildPrepEmbed(
   }
 
   embed.setFooter({
-    text: rest ? 'Journée de repos — aucun objectif demain' : 'Présentée demain à 7h, prête à cocher',
+    text: rest
+      ? 'Repos — rien ne te sera reproché demain'
+      : 'Présentée demain à 7h, prête à cocher',
   });
   return embed;
 }
@@ -127,9 +129,8 @@ export function buildPrepComponents(
     ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
   );
 
-  // Un jour de repos, on ne propose ni report ni ajout de tâches.
-  if (rest) return rows;
-
+  // Même marquée « repos », la journée reste planifiable : on peut y poser
+  // des tâches. Le type ne change que le ton du bot, jamais les possibilités.
   if (pending.length > 0) {
     const options = pending.slice(0, MAX_OPTIONS);
     rows.push(
