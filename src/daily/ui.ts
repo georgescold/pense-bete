@@ -40,11 +40,15 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * Barre pleine (█) sur fond tramé (░), dans un bloc `code` pour rester en
+ * chasse fixe. Les cases creuses type ▱ donnaient un rendu vide et transparent.
+ */
 function progressBar(done: number, total: number): string {
-  const slots = 10;
+  const slots = 12;
   const filled = total === 0 ? 0 : Math.round((done / total) * slots);
   const pct = total === 0 ? 0 : Math.round((done / total) * 100);
-  return `${'▰'.repeat(filled)}${'▱'.repeat(slots - filled)}  **${done}/${total}** · ${pct} %`;
+  return `\`${'█'.repeat(filled)}${'░'.repeat(slots - filled)}\`  **${done}/${total}** · ${pct} %`;
 }
 
 /**
