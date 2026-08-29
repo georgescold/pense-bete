@@ -5,11 +5,13 @@ import {
   Interaction,
   MessageFlags,
 } from 'discord.js';
-import { config } from './config';
+import { config, dailyEnabled } from './config';
 import { logger } from './logger';
 import { commandMap } from './commands';
 import { handleWizardInteraction, isWizardInteraction } from './commands/wizard';
 import { handleReminderComponent, isReminderComponent } from './commands/reminderActions';
+import { handleDailyInteraction, isDailyInteraction } from './daily/interactions';
+import { startDailyJobs } from './daily/jobs';
 import { buildHelpEmbed } from './lib/embeds';
 import { Scheduler } from './scheduler/scheduler';
 import { listAllActive, updateNextRunAt } from './db/repository';
@@ -51,6 +53,12 @@ async function main(): Promise<void> {
       logger.info({ count: active.length, scheduled: scheduler.size() }, '⏰ rappels rechargés');
     } catch (err) {
       logger.error({ err }, 'failed to reload reminders on startup');
+    }
+
+    if (dailyEnabled) {
+      startDailyJobs(client);
+    } else {
+      logger.info('journées de travail désactivées (DAILY_CHANNEL_ID / DAILY_USER_ID absents)');
     }
   });
 
@@ -98,6 +106,30 @@ async function main(): Promise<void> {
           if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
             await interaction.reply({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
           } else if (interaction.isRepliable()) {
+            await interaction.followUp({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+
+    if (
+      (interaction.isButton() ||
+        interaction.isStringSelectMenu() ||
+        interaction.isModalSubmit()) &&
+      isDailyInteraction(interaction.customId)
+    ) {
+      try {
+        await handleDailyInteraction(interaction);
+      } catch (err) {
+        logger.error({ err, customId: interaction.customId }, 'daily interaction failed');
+        const msg = err instanceof Error ? err.message : 'Erreur inconnue';
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          } else {
             await interaction.followUp({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
           }
         } catch {
