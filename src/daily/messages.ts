@@ -97,22 +97,23 @@ const CLOSE_GOOD = [
 
 // En dessous de la moitié, le ton pique. En dessous de tout, il mord.
 const CLOSE_PARTIAL = [
-  '😒 **{done}/{total}**. Tu appelles ça une journée de travail ?',
-  '🥱 **{done}/{total}** — t’as fait le minimum syndical, bravo.',
-  '📉 **{done}/{total}**. Moitié de journée, moitié d’effort.',
-  '🫤 **{done}/{total}**. T’as commencé fort et t’as lâché, comme d’hab.',
-  '🤏 **{done}/{total}**. C’est maigre. Très maigre.',
-  '⌛ **{done}/{total}** — le reste, c’est pour la Saint-Glinglin ?',
+  '😒 **{done}/{total}**. Tu appelles ça une journée de travail, sérieux ?',
+  '🥱 **{done}/{total}** — minimum syndical, bravo le branleur.',
+  '📉 **{done}/{total}**. T’as lâché en route comme d’habitude.',
+  '🫤 **{done}/{total}**. C’est faiblard, secoue-toi.',
+  '🤏 **{done}/{total}**. Maigre. Très maigre. Fais mieux demain.',
+  '⌛ **{done}/{total}** — le reste, c’est pour quand exactement ?',
 ];
 
 const CLOSE_NONE = [
-  '🤡 **0/{total}**. T’as rien branlé de la journée. Zéro. Nada.',
-  '💩 **0/{total}**. Journée intégralement gâchée, félicitations champion.',
-  '🗑️ **0/{total}** — t’as réussi l’exploit de ne rien faire du tout.',
-  '😤 **0/{total}**. T’avais {total} trucs à faire. {total}. T’en as fait AUCUN.',
-  '📵 **0/{total}**. T’as passé la journée à scroller, avoue.',
-  '🥀 **0/{total}**. Pathétique. Demain tu te bouges.',
-  '🫵 **0/{total}**. C’est toi le problème, pas la liste.',
+  '🤬 **0/{total}**. Espèce de connard, réveille-toi.',
+  '🤬 **0/{total}**. Enculé, retourne bosser.',
+  '🤬 **0/{total}**. T’as rien branlé de la journée, connard.',
+  '🤬 **0/{total}** — {total} tâches, zéro faite. T’es sérieux, abruti ?',
+  '🤬 **0/{total}**. Bouge ton cul, ça devient ridicule.',
+  '🤬 **0/{total}**. Journée de merde, entièrement de ta faute.',
+  '🤬 **0/{total}**. Arrête de scroller et va bosser, bordel.',
+  '🤬 **0/{total}**. Zéro pointé. Tu me dégoûtes.',
 ];
 
 const CLOSE_EMPTY = [
