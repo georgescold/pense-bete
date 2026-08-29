@@ -123,7 +123,9 @@ async function ensureTab(): Promise<void> {
   await api(`/values/${encodeURIComponent(`${SHEET_TAB}!A1`)}:append?valueInputOption=USER_ENTERED`, {
     method: 'POST',
     body: JSON.stringify({
-      values: [['Date', 'Jour', 'Tâche', 'Statut', 'Reportée', 'Faite à', 'Bilan du jour']],
+      values: [
+        ['Date', 'Jour', 'Type', 'Tâche', 'Statut', 'Reportée', 'Faite à', 'Bilan du jour'],
+      ],
     }),
   });
   logger.info({ tab: SHEET_TAB }, 'onglet Google Sheets créé');

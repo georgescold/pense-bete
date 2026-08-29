@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 
 export type PlanStatus = 'draft' | 'active' | 'closed';
+export type DayType = 'work' | 'rest';
 
 export interface DayPlanRow {
   id: number;
@@ -9,6 +10,7 @@ export interface DayPlanRow {
   guild_id: string | null;
   plan_date: string; // 'YYYY-MM-DD' en heure murale Europe/Paris
   status: PlanStatus;
+  day_type: DayType;
   prep_message_id: string | null;
   board_message_id: string | null;
   closed_at: string | null;
@@ -29,6 +31,7 @@ export interface DailyTaskRow {
 
 export type DayPlanPatch = Partial<{
   status: PlanStatus;
+  day_type: DayType;
   prep_message_id: string | null;
   board_message_id: string | null;
   closed_at: string | null;

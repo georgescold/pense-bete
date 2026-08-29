@@ -14,6 +14,7 @@ const COLOR_PREP = 0xfaa61a; // ambre : on prépare
 const COLOR_BOARD = 0x5865f2; // bleu : journée en cours
 const COLOR_DONE = 0x57f287; // vert : tout est fait
 const COLOR_CLOSED = 0x4f545c; // gris : journée close
+const COLOR_REST = 0x9b59b6; // violet : journée de repos
 
 /** Un menu déroulant Discord accepte 25 options ; une ligne accueille 5 boutons. */
 const MAX_OPTIONS = 25;
@@ -74,24 +75,29 @@ export function buildPrepEmbed(
   tasks: DailyTaskRow[],
   pending: DailyTaskRow[],
 ): EmbedBuilder {
+  const rest = plan.day_type === 'rest';
   const embed = new EmbedBuilder()
-    .setColor(COLOR_PREP)
+    .setColor(rest ? COLOR_REST : COLOR_PREP)
     .setAuthor({ name: 'Préparation de demain' })
-    .setTitle(`📝 ${capitalize(formatPlanDate(plan.plan_date))}`)
+    .setTitle(`${rest ? '🛌' : '📝'} ${capitalize(formatPlanDate(plan.plan_date))}`)
     .setDescription(
-      tasks.length > 0
-        ? truncate(taskLines(tasks), 3800)
-        : '*Ta liste est vide.*\nAjoute tes tâches une par une avec **➕ Ajouter une tâche**.',
+      rest && tasks.length === 0
+        ? '*Journée de repos.* Rien à préparer — le bot ne te demandera rien demain.'
+        : tasks.length > 0
+          ? truncate(taskLines(tasks), 3800)
+          : '*Ta liste est vide.*\nAjoute tes tâches une par une avec **➕ Ajouter une tâche**.',
     );
 
-  if (pending.length > 0) {
+  if (pending.length > 0 && !rest) {
     embed.addFields({
       name: `↩︎ Pas terminé aujourd’hui — ${pending.length} tâche(s)`,
       value: truncate(pending.map((t) => `• ${t.label}`).join('\n'), 1000),
     });
   }
 
-  embed.setFooter({ text: 'Présentée demain à 7h, prête à cocher' });
+  embed.setFooter({
+    text: rest ? 'Journée de repos — aucun objectif demain' : 'Présentée demain à 7h, prête à cocher',
+  });
   return embed;
 }
 
@@ -101,6 +107,28 @@ export function buildPrepComponents(
   pending: DailyTaskRow[],
 ): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
+  const rest = plan.day_type === 'rest';
+
+  // Travail ou repos : le choix conditionne tout le reste de la journée.
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`daily:type:${plan.id}:work`)
+        .setLabel('Journée de travail')
+        .setEmoji('💼')
+        .setStyle(rest ? ButtonStyle.Secondary : ButtonStyle.Primary)
+        .setDisabled(!rest),
+      new ButtonBuilder()
+        .setCustomId(`daily:type:${plan.id}:rest`)
+        .setLabel('Journée de repos')
+        .setEmoji('🛌')
+        .setStyle(rest ? ButtonStyle.Success : ButtonStyle.Secondary)
+        .setDisabled(rest),
+    ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
+  );
+
+  // Un jour de repos, on ne propose ni report ni ajout de tâches.
+  if (rest) return rows;
 
   if (pending.length > 0) {
     const options = pending.slice(0, MAX_OPTIONS);
@@ -147,12 +175,21 @@ export function buildPrepComponents(
 export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedBuilder {
   const done = tasks.filter((t) => t.is_done).length;
   const closed = plan.status === 'closed';
+  const rest = plan.day_type === 'rest';
   const allDone = tasks.length > 0 && done === tasks.length;
 
   const embed = new EmbedBuilder()
-    .setColor(closed ? COLOR_CLOSED : allDone ? COLOR_DONE : COLOR_BOARD)
-    .setAuthor({ name: closed ? 'Journée archivée' : 'Ta journée' })
-    .setTitle(`${closed ? '🏁' : allDone ? '🎉' : '☀️'} ${capitalize(formatPlanDate(plan.plan_date))}`);
+    .setColor(closed ? COLOR_CLOSED : rest ? COLOR_REST : allDone ? COLOR_DONE : COLOR_BOARD)
+    .setAuthor({ name: closed ? 'Journée archivée' : rest ? 'Journée de repos' : 'Ta journée' })
+    .setTitle(
+      `${closed ? '🏁' : rest ? '🛌' : allDone ? '🎉' : '☀️'} ${capitalize(formatPlanDate(plan.plan_date))}`,
+    );
+
+  if (rest && tasks.length === 0) {
+    embed.setDescription('*Journée de repos.* Aucun objectif aujourd’hui.');
+    embed.setFooter({ text: closed ? 'Repos archivé' : 'Profite' });
+    return embed;
+  }
 
   if (tasks.length === 0) {
     embed.setDescription(
@@ -180,6 +217,8 @@ export function buildBoardComponents(
   tasks: DailyTaskRow[],
 ): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
   if (plan.status === 'closed') return [];
+  // Repos sans tâche : aucun bouton, le bot ne sollicite rien.
+  if (plan.day_type === 'rest' && tasks.length === 0) return [];
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
   // Un bouton par tâche : cocher se fait en un seul clic.

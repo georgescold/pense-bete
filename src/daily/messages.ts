@@ -63,7 +63,16 @@ const BOARD_INTROS_EMPTY = [
   'rien d’écrit aujourd’hui.',
 ];
 
-export function boardIntro(taskCount: number): string {
+const BOARD_INTROS_REST = [
+  'aujourd’hui c’est repos 🛌 Rien au programme.',
+  'journée de repos 🌴 Profite.',
+  'off aujourd’hui 😌 Rien à cocher.',
+  'repos prévu aujourd’hui ☕ Bonne journée.',
+  'journée off 🛋️ Tu peux ignorer ce salon.',
+];
+
+export function boardIntro(taskCount: number, isRest = false): string {
+  if (isRest) return pick(BOARD_INTROS_REST);
   return taskCount > 0 ? pick(BOARD_INTROS) : pick(BOARD_INTROS_EMPTY);
 }
 
@@ -119,6 +128,12 @@ const CLOSE_PERFECT = [
   '🎬 **{done}/{total}**. Rideau, journée pliée.',
   '🏁 **{done}/{total}**. Fin de journée, plus rien au tableau.',
   '👏 **{done}/{total}**. Impeccable.',
+  '🛌 **{done}/{total}**. Journée pliée, bon repos.',
+  '🌙 **{done}/{total}**. Rien qui traîne — bonne soirée.',
+  '☕ **{done}/{total}**. Tout est fait, pose-toi.',
+  '🛋️ **{done}/{total}**. Terminé. Coupe et profite de ta soirée.',
+  '😴 **{done}/{total}**. Journée bouclée, repose-toi bien.',
+  '🎮 **{done}/{total}**. Liste vide, soirée libre.',
 ];
 
 const CLOSE_GOOD = [
@@ -134,6 +149,9 @@ const CLOSE_GOOD = [
   '⚡ **{done}/{total}**. Bon rythme.',
   '📦 **{done}/{total}**. Emballé, c’est pesé.',
   '🆗 **{done}/{total}**. Rien à redire.',
+  '🌙 **{done}/{total}**. Bonne soirée.',
+  '🛋️ **{done}/{total}**. Le gros est passé, pose-toi.',
+  '☕ **{done}/{total}**. Ça suffit pour aujourd’hui, repose-toi.',
 ];
 
 // En dessous de la moitié, le ton pique. En dessous de tout, il mord.
@@ -179,6 +197,22 @@ const CLOSE_NONE = [
   '🤬 **0/{total}**. Zéro. Le mot est court, l’excuse le sera aussi.',
 ];
 
+// Journée déclarée en repos : aucun reproche, quoi qu'il y ait dans la liste.
+const CLOSE_REST = [
+  '🛌 Journée de repos. Rien à comptabiliser.',
+  '🌴 Repos assumé. On archive et on n’en parle plus.',
+  '😌 Journée off. C’était prévu, c’est très bien.',
+  '🛋️ Repos. Aucun objectif, aucun reproche.',
+  '☕ Journée de repos bien méritée.',
+  '🌙 Off aujourd’hui. Bon repos.',
+];
+
+const CLOSE_REST_WITH_TASKS = [
+  '🛌 Journée de repos, et t’as quand même bouclé **{done}/{total}**. Bonus.',
+  '🌴 Off, mais **{done}/{total}** de fait. Personne te demandait ça.',
+  '😌 Repos avec **{done}/{total}** au compteur. Tranquille.',
+];
+
 const CLOSE_EMPTY = [
   '📄 Journée sans tâche, archivée telle quelle.',
   '🌙 Rien au programme aujourd’hui — c’est noté.',
@@ -186,7 +220,13 @@ const CLOSE_EMPTY = [
   '🗓️ Aucune tâche prévue. Journée off assumée.',
 ];
 
-export function closingLine(done: number, total: number): string {
+export function closingLine(done: number, total: number, isRest = false): string {
+  if (isRest) {
+    if (done === 0) return pick(CLOSE_REST);
+    return pick(CLOSE_REST_WITH_TASKS)
+      .replaceAll('{done}', String(done))
+      .replaceAll('{total}', String(total));
+  }
   if (total === 0) return pick(CLOSE_EMPTY);
   const ratio = done / total;
   const variants =

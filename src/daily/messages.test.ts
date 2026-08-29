@@ -70,3 +70,25 @@ describe('boardFooter', () => {
     expect(seen.size).toBeGreaterThan(1);
   });
 });
+
+describe('journée de repos', () => {
+  it('ne reproche jamais rien un jour de repos', () => {
+    const lines = Array.from({ length: 60 }, () => closingLine(0, 0, true));
+    const insultes = ['connard', 'enculé', 'merde', 'feignasse', 'déchet', 'tocard'];
+    expect(lines.every((l) => !insultes.some((i) => l.toLowerCase().includes(i)))).toBe(true);
+  });
+
+  it('salue les tâches faites malgré le repos', () => {
+    for (let i = 0; i < 40; i += 1) {
+      const line = closingLine(2, 3, true);
+      expect(line).toContain('2/3');
+      expect(line).not.toContain('{done}');
+    }
+  });
+
+  it('propose une intro dédiée au repos', () => {
+    const rest = Array.from({ length: 40 }, () => boardIntro(0, true));
+    const work = Array.from({ length: 40 }, () => boardIntro(0, false));
+    expect(rest.some((r) => work.includes(r))).toBe(false);
+  });
+});

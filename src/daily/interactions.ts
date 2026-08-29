@@ -18,6 +18,7 @@ import {
   listTasks,
   listTasksByIds,
   setTaskDone,
+  updatePlan,
   type DailyTaskRow,
 } from '../db/dailyRepository';
 import { closePlan, refreshPlanMessages } from './service';
@@ -88,6 +89,18 @@ export async function handleDailyInteraction(interaction: Interaction): Promise<
         await addTask(plan.id, label);
         await refreshPlanMessages(modal.client, plan);
         logger.info({ id: plan.id, label }, 'tache ajoutee');
+      }
+      return;
+    }
+
+    // Choix travail / repos pour la journée préparée.
+    case 'type': {
+      const next = parsed.extra === 'rest' ? 'rest' : 'work';
+      await (interaction as ButtonInteraction).deferUpdate();
+      if (plan.day_type !== next) {
+        const updated = await updatePlan(plan.id, { day_type: next });
+        await refreshPlanMessages(interaction.client, updated ?? { ...plan, day_type: next });
+        logger.info({ id: plan.id, day_type: next }, 'type de journee change');
       }
       return;
     }

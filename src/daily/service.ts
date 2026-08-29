@@ -146,7 +146,7 @@ export async function runBoardJob(client: Client): Promise<void> {
   };
 
   const sent = await channel.send({
-    content: `${userMention(userId())} ${boardIntro(tasks.length)}`,
+    content: `${userMention(userId())} ${boardIntro(tasks.length, active.day_type === 'rest')}`,
     embeds: [buildBoardEmbed(active, tasks)],
     components: buildBoardComponents(active, tasks),
     allowedMentions: { users: [userId()] },
@@ -170,7 +170,7 @@ export async function closePlan(client: Client, plan: DayPlanRow): Promise<DayPl
   const channel = await fetchChannel(client);
   if (channel) {
     await channel
-      .send({ content: closingLine(done, tasks.length) })
+      .send({ content: closingLine(done, tasks.length, closed.day_type === 'rest') })
       .catch((err) => logger.warn({ err, id: closed.id }, 'bilan de cloture non envoye'));
   }
 
@@ -189,14 +189,17 @@ function parisTime(iso: string | null): string {
 
 function planToRows(plan: DayPlanRow, tasks: DailyTaskRow[]): string[][] {
   const jour = formatPlanDate(plan.plan_date).split(' ')[0] ?? '';
+  const type = plan.day_type === 'rest' ? 'Repos' : 'Travail';
   const done = tasks.filter((t) => t.is_done).length;
   const bilan = `${done}/${tasks.length}`;
   if (tasks.length === 0) {
-    return [[plan.plan_date, jour, '(aucune tâche)', '—', 'non', '', '0/0']];
+    const label = plan.day_type === 'rest' ? '(journée de repos)' : '(aucune tâche)';
+    return [[plan.plan_date, jour, type, label, '—', 'non', '', '0/0']];
   }
   return tasks.map((t) => [
     plan.plan_date,
     jour,
+    type,
     t.label,
     t.is_done ? 'Fait' : 'Non fait',
     t.carried_over ? 'oui' : 'non',
