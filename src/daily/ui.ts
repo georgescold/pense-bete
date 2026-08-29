@@ -173,15 +173,9 @@ export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedB
   return embed;
 }
 
-/**
- * Jusqu'à 5 tâches, le bouton porte le libellé : il remplit sa largeur et se
- * lit sans faire l'aller-retour avec la liste. Au-delà, une ligne complète de
- * libellés serait illisible, on retombe sur le numéro.
- */
-function taskButtonLabel(task: DailyTaskRow, position: number, total: number): string {
-  const mark = task.is_done ? '✓ ' : '';
-  if (total <= BUTTONS_PER_ROW) return `${mark}${truncate(task.label, 30)}`;
-  return `${mark}${position}`;
+/** Le bouton porte le numéro de la tâche, qui renvoie à la ligne de la liste. */
+function taskButtonLabel(task: DailyTaskRow, position: number): string {
+  return task.is_done ? `✓ ${position}` : String(position);
 }
 
 export function buildBoardComponents(
@@ -204,7 +198,7 @@ export function buildBoardComponents(
             .setCustomId(`daily:toggle:${plan.id}:${t.id}`)
             // Boutons pleins des deux côtés (bleu à faire / vert fait) : le gris
             // Secondary rendait des cases quasi transparentes et vides.
-            .setLabel(taskButtonLabel(t, i + j + 1, withButtons.length))
+            .setLabel(taskButtonLabel(t, i + j + 1))
             .setStyle(t.is_done ? ButtonStyle.Success : ButtonStyle.Primary),
         ),
       ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
