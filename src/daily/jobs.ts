@@ -1,8 +1,11 @@
 import cron from 'node-cron';
+import parser from 'cron-parser';
 import type { Client } from 'discord.js';
 import { config } from '../config';
 import { logger } from '../logger';
-import { runBoardJob, runPrepJob, syncPendingPlans } from './service';
+import { getPlan } from '../db/dailyRepository';
+import { planDateFor, runBoardJob, runPrepJob, syncPendingPlans } from './service';
+import { parisDateValue } from '../lib/datetime';
 
 /**
  * Deux rendez-vous quotidiens, à l'heure de Paris :
@@ -44,4 +47,52 @@ export function startDailyJobs(client: Client): void {
   // Rattrapage : si Google Sheets était indisponible ou non configuré, les
   // journées clôturées en attente repartent dès que possible.
   void syncPendingPlans().catch((err) => logger.error({ err }, 'echec du rattrapage Sheets'));
+
+  void catchUpMissedJobs(client).catch((err) =>
+    logger.error({ err }, 'echec du rattrapage des journees'),
+  );
+}
+
+/**
+ * `node-cron` ne déclenche que si le processus est vivant à la minute exacte :
+ * un redémarrage à 7h00 fait perdre l'occurrence, sans erreur ni trace. On
+ * vérifie donc au démarrage si le rendez-vous du jour est déjà passé sans
+ * avoir laissé de message, et on le rejoue le cas échéant.
+ *
+ * L'opération est idempotente : c'est la présence de l'identifiant du message
+ * en base qui fait foi, donc un boot après un déclenchement normal ne reposte
+ * rien.
+ */
+export async function catchUpMissedJobs(client: Client): Promise<void> {
+  const userId = config.DAILY_USER_ID as string;
+
+  if (hasFiredToday(config.DAILY_BOARD_CRON)) {
+    const plan = await getPlan(userId, planDateFor(0));
+    if (!plan?.board_message_id) {
+      logger.warn({ cron: config.DAILY_BOARD_CRON }, 'checklist du matin manquee, rattrapage');
+      await runBoardJob(client);
+    }
+  }
+
+  if (hasFiredToday(config.DAILY_PREP_CRON)) {
+    const plan = await getPlan(userId, planDateFor(1));
+    if (!plan?.prep_message_id) {
+      logger.warn({ cron: config.DAILY_PREP_CRON }, 'preparation du soir manquee, rattrapage');
+      await runPrepJob(client);
+    }
+  }
+}
+
+/** L'occurrence la plus récente de ce cron tombe-t-elle aujourd'hui, à Paris ? */
+export function hasFiredToday(expr: string, now: Date = new Date()): boolean {
+  try {
+    const previous = parser
+      .parseExpression(expr, { currentDate: now, tz: config.TIMEZONE })
+      .prev()
+      .toDate();
+    return parisDateValue(0, previous) === parisDateValue(0, now);
+  } catch (err) {
+    logger.error({ err, expr }, 'cron illisible pour le rattrapage');
+    return false;
+  }
 }
