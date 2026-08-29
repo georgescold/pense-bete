@@ -12,6 +12,7 @@ import {
 } from '../db/dailyRepository';
 import { parisDateValue } from '../lib/datetime';
 import { appendRows, isSheetsConfigured } from '../lib/sheets';
+import { boardIntro, closingLine, prepIntro } from './messages';
 import {
   buildBoardComponents,
   buildBoardEmbed,
@@ -108,7 +109,7 @@ export async function runPrepJob(client: Client): Promise<void> {
   const pending = await pendingTasksBefore(plan);
 
   const sent = await channel.send({
-    content: `${userMention(userId())} on prépare **${formatPlanDate(tomorrow)}** ?`,
+    content: `${userMention(userId())} ${prepIntro(formatPlanDate(tomorrow))}`,
     embeds: [buildPrepEmbed(plan, tasks, pending)],
     components: buildPrepComponents(plan, tasks, pending),
     allowedMentions: { users: [userId()] },
@@ -145,10 +146,7 @@ export async function runBoardJob(client: Client): Promise<void> {
   };
 
   const sent = await channel.send({
-    content:
-      tasks.length > 0
-        ? `${userMention(userId())} voici ta journée 👇`
-        : `${userMention(userId())} aucune tâche prévue aujourd'hui — tu peux en ajouter ci-dessous.`,
+    content: `${userMention(userId())} ${boardIntro(tasks.length)}`,
     embeds: [buildBoardEmbed(active, tasks)],
     components: buildBoardComponents(active, tasks),
     allowedMentions: { users: [userId()] },
@@ -165,6 +163,17 @@ export async function closePlan(client: Client, plan: DayPlanRow): Promise<DayPl
   const closed =
     (await updatePlan(plan.id, { status: 'closed', closed_at: new Date().toISOString() })) ?? plan;
   await refreshPlanMessages(client, closed);
+
+  // Petit bilan public, dans l'esprit du bot sport.
+  const tasks = await listTasks(closed.id);
+  const done = tasks.filter((t) => t.is_done).length;
+  const channel = await fetchChannel(client);
+  if (channel) {
+    await channel
+      .send({ content: closingLine(done, tasks.length) })
+      .catch((err) => logger.warn({ err, id: closed.id }, 'bilan de cloture non envoye'));
+  }
+
   await syncPendingPlans();
   return closed;
 }

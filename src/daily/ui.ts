@@ -8,6 +8,7 @@ import {
 } from 'discord.js';
 import type { DailyTaskRow, DayPlanRow } from '../db/dailyRepository';
 import { truncate } from '../lib/format';
+import { boardFooter } from './messages';
 
 const COLOR_PREP = 0xfaa61a; // ambre : on prépare
 const COLOR_BOARD = 0x5865f2; // bleu : journée en cours
@@ -164,11 +165,7 @@ export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedB
   }
 
   embed.setFooter({
-    text: closed
-      ? 'Journée close et archivée dans le Sheet'
-      : allDone
-        ? 'Tout est fait, bravo'
-        : 'Clique sur un numéro pour cocher',
+    text: closed ? 'Journée close et archivée dans le Sheet' : boardFooter(allDone, plan.id),
   });
   return embed;
 }
