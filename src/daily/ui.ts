@@ -214,8 +214,17 @@ export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedB
 }
 
 /** Le bouton porte le numéro de la tâche, qui renvoie à la ligne de la liste. */
-function taskButtonLabel(task: DailyTaskRow, position: number): string {
-  return task.is_done ? `✓ ${position}` : String(position);
+function taskButtonLabel(_task: DailyTaskRow, position: number): string {
+  return String(position);
+}
+
+/**
+ * Icône de validation à gauche du numéro : coche pleine une fois la tâche
+ * faite, coche sobre tant qu'elle reste à cocher. On évite les emojis de case
+ * (⬜) qui s'affichent en pleine chasse et forment un pavé blanc.
+ */
+function taskButtonEmoji(task: DailyTaskRow): string {
+  return task.is_done ? '✅' : '✔️';
 }
 
 export function buildBoardComponents(
@@ -242,6 +251,7 @@ export function buildBoardComponents(
             // Boutons pleins des deux côtés (bleu à faire / vert fait) : le gris
             // Secondary rendait des cases quasi transparentes et vides.
             .setLabel(taskButtonLabel(t, i + j + 1))
+            .setEmoji(taskButtonEmoji(t))
             .setStyle(t.is_done ? ButtonStyle.Success : ButtonStyle.Primary),
         ),
       ) as ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>,
