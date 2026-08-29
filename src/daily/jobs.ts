@@ -44,13 +44,34 @@ export function startDailyJobs(client: Client): void {
     'journees de travail planifiees',
   );
 
-  // Rattrapage : si Google Sheets était indisponible ou non configuré, les
-  // journées clôturées en attente repartent dès que possible.
-  void syncPendingPlans().catch((err) => logger.error({ err }, 'echec du rattrapage Sheets'));
+  // Ces deux rattrapages tapent en base au démarrage : si Supabase est encore
+  // en train de revenir, une seule tentative les perdrait silencieusement.
+  void withRetries('rattrapage Sheets', () => syncPendingPlans());
+  void withRetries('rattrapage des journées', () => catchUpMissedJobs(client));
+}
 
-  void catchUpMissedJobs(client).catch((err) =>
-    logger.error({ err }, 'echec du rattrapage des journees'),
-  );
+const BOOT_RETRY_MS = [5_000, 15_000, 30_000, 60_000];
+
+/** Réessaie quelques fois avant d'abandonner, en le disant clairement. */
+export async function withRetries(
+  label: string,
+  fn: () => Promise<void>,
+  delays: number[] = BOOT_RETRY_MS,
+): Promise<void> {
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      await fn();
+      return;
+    } catch (err) {
+      const delay = delays[attempt];
+      if (delay === undefined) {
+        logger.error({ err, label }, 'abandon apres plusieurs tentatives');
+        return;
+      }
+      logger.warn({ err, label, attempt, retryInMs: delay }, 'echec, nouvelle tentative');
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
 }
 
 /**

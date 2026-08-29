@@ -17,6 +17,61 @@ import { Scheduler } from './scheduler/scheduler';
 import { listAllActive, updateNextRunAt } from './db/repository';
 import { computeNextCronRun } from './scheduler/scheduler';
 
+/** Paliers d'attente entre deux tentatives de rechargement, puis 2 min à vie. */
+const RELOAD_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Charge les rappels actifs et les arme dans le planificateur. */
+async function reloadReminders(scheduler: Scheduler): Promise<number> {
+  const active = await listAllActive();
+  // Pour les rappels ponctuels dont l'heure est passée pendant le downtime,
+  // on les déclenche immédiatement (puis ils seront supprimés par fireReminder).
+  // Pour les récurrents en retard, on avance next_run_at avant de planifier.
+  const now = new Date();
+  for (const r of active) {
+    const nextRun = new Date(r.next_run_at);
+    if (r.schedule_type === 'recurring' && r.cron_expression && nextRun.getTime() < now.getTime()) {
+      try {
+        const fresh = computeNextCronRun(r.cron_expression, now);
+        await updateNextRunAt(r.id, fresh);
+        r.next_run_at = fresh.toISOString();
+      } catch (err) {
+        logger.error({ err, id: r.id }, 'failed to recompute next_run_at on reload');
+      }
+    }
+    scheduler.schedule(r);
+  }
+  return active.length;
+}
+
+/**
+ * Réessaie indéfiniment tant que la base ne répond pas.
+ *
+ * Sans ça, une indisponibilité de Supabase au démarrage laissait le bot
+ * tourner avec un planificateur vide, sans alerte et sans jamais retenter :
+ * les rappels ne partaient plus du tout jusqu'à un redémarrage manuel.
+ */
+async function reloadRemindersWithRetry(scheduler: Scheduler): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const count = await reloadReminders(scheduler);
+      logger.info(
+        { count, scheduled: scheduler.size(), attempt },
+        '⏰ rappels rechargés',
+      );
+      return;
+    } catch (err) {
+      const delay = RELOAD_BACKOFF_MS[Math.min(attempt, RELOAD_BACKOFF_MS.length - 1)] as number;
+      logger.error(
+        { err, attempt, retryInMs: delay },
+        'rechargement des rappels impossible, nouvelle tentative programmée',
+      );
+      await sleep(delay);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const client = new Client({
     intents: [
@@ -31,29 +86,11 @@ async function main(): Promise<void> {
 
   client.once(Events.ClientReady, async (c) => {
     logger.info({ tag: c.user.tag }, '🤖 bot connecté');
-    try {
-      const active = await listAllActive();
-      // Pour les rappels ponctuels dont l'heure est passée pendant le downtime,
-      // on les déclenche immédiatement (puis ils seront supprimés par fireReminder).
-      // Pour les récurrents en retard, on avance next_run_at avant de planifier.
-      const now = new Date();
-      for (const r of active) {
-        const nextRun = new Date(r.next_run_at);
-        if (r.schedule_type === 'recurring' && r.cron_expression && nextRun.getTime() < now.getTime()) {
-          try {
-            const fresh = computeNextCronRun(r.cron_expression, now);
-            await updateNextRunAt(r.id, fresh);
-            r.next_run_at = fresh.toISOString();
-          } catch (err) {
-            logger.error({ err, id: r.id }, 'failed to recompute next_run_at on reload');
-          }
-        }
-        scheduler.schedule(r);
-      }
-      logger.info({ count: active.length, scheduled: scheduler.size() }, '⏰ rappels rechargés');
-    } catch (err) {
-      logger.error({ err }, 'failed to reload reminders on startup');
-    }
+
+    // Ne bloque pas le démarrage : si la base est injoignable, les journées de
+    // travail doivent quand même se planifier pendant que le rechargement des
+    // rappels réessaie en arrière-plan.
+    void reloadRemindersWithRetry(scheduler);
 
     if (dailyEnabled) {
       startDailyJobs(client);
