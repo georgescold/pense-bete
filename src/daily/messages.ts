@@ -97,23 +97,30 @@ const CLOSE_GOOD = [
 
 // En dessous de la moitié, le ton pique. En dessous de tout, il mord.
 const CLOSE_PARTIAL = [
-  '😒 **{done}/{total}**. Tu appelles ça une journée de travail, sérieux ?',
-  '🥱 **{done}/{total}** — minimum syndical, bravo le branleur.',
-  '📉 **{done}/{total}**. T’as lâché en route comme d’habitude.',
-  '🫤 **{done}/{total}**. C’est faiblard, secoue-toi.',
-  '🤏 **{done}/{total}**. Maigre. Très maigre. Fais mieux demain.',
-  '⌛ **{done}/{total}** — le reste, c’est pour quand exactement ?',
+  '😒 **{done}/{total}**. Tu appelles ça une journée de travail, connard ?',
+  '🥱 **{done}/{total}** — minimum syndical, bravo la feignasse.',
+  '📉 **{done}/{total}**. T’as lâché en route comme la merde que tu es.',
+  '🫤 **{done}/{total}**. C’est faiblard, secoue-toi bordel.',
+  '🤏 **{done}/{total}**. Maigre. Pitoyable. Fais mieux demain, guignol.',
+  '⌛ **{done}/{total}** — le reste, c’est pour quand exactement, branleur ?',
+  '😤 **{done}/{total}**. À moitié fait, comme tout ce que t’entreprends.',
 ];
 
 const CLOSE_NONE = [
   '🤬 **0/{total}**. Espèce de connard, réveille-toi.',
   '🤬 **0/{total}**. Enculé, retourne bosser.',
-  '🤬 **0/{total}**. T’as rien branlé de la journée, connard.',
-  '🤬 **0/{total}** — {total} tâches, zéro faite. T’es sérieux, abruti ?',
-  '🤬 **0/{total}**. Bouge ton cul, ça devient ridicule.',
-  '🤬 **0/{total}**. Journée de merde, entièrement de ta faute.',
-  '🤬 **0/{total}**. Arrête de scroller et va bosser, bordel.',
-  '🤬 **0/{total}**. Zéro pointé. Tu me dégoûtes.',
+  '🤬 **0/{total}**. T’as rien branlé de la journée, sale merde.',
+  '🤬 **0/{total}** — {total} tâches, zéro faite. T’es qu’un putain de déchet.',
+  '🤬 **0/{total}**. Bouge ton gros cul de feignasse, ça devient pathétique.',
+  '🤬 **0/{total}**. Grosse loque. T’as gâché une journée entière de ta vie.',
+  '🤬 **0/{total}**. Arrête de scroller comme un abruti et va bosser, bordel.',
+  '🤬 **0/{total}**. Zéro pointé. T’es une honte ambulante.',
+  '🤬 **0/{total}**. T’as la motivation d’une huître crevée. Lamentable.',
+  '🤬 **0/{total}**. Tocard. {total} trucs à faire et t’as préféré glander.',
+  '🤬 **0/{total}**. Tu te plains de pas avancer ? Regarde ce chiffre, guignol.',
+  '🤬 **0/{total}**. Journée de merde par un mec qui se cherche des excuses.',
+  '🤬 **0/{total}**. Même pas UNE. T’es sérieux là ? Ressaisis-toi, bon sang.',
+  '🤬 **0/{total}**. Bravo champion du monde de la glandouille.',
 ];
 
 const CLOSE_EMPTY = [
