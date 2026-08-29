@@ -66,7 +66,9 @@ async function execute(interaction: ChatInputCommandInteraction): Promise<void> 
   }
 
   if (sub === 'aujourdhui') {
-    await runBoardJob(interaction.client);
+    // Ouverture manuelle : on ne déduit pas « repos », l'utilisateur vient
+    // justement remplir sa journée.
+    await runBoardJob(interaction.client, false);
     await interaction.deleteReply();
     return;
   }

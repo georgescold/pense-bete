@@ -190,7 +190,9 @@ export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedB
     );
 
   if (rest && tasks.length === 0) {
-    embed.setDescription('*Journée de repos.* Aucun objectif aujourd’hui.');
+    embed.setDescription(
+      '*Journée de repos.* Aucun objectif aujourd’hui — tu peux quand même ajouter une tâche avec **➕**.',
+    );
     embed.setFooter({ text: closed ? 'Repos archivé' : 'Profite' });
     return embed;
   }
@@ -220,9 +222,10 @@ export function buildBoardComponents(
   plan: DayPlanRow,
   tasks: DailyTaskRow[],
 ): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] {
+  // Une journée close n'est plus modifiable. Dans tous les autres cas — repos
+  // compris — la ligne d'actions reste : ne jamais enfermer l'utilisateur en
+  // lui retirant le seul moyen d'ajouter une tâche.
   if (plan.status === 'closed') return [];
-  // Repos sans tâche : aucun bouton, le bot ne sollicite rien.
-  if (plan.day_type === 'rest' && tasks.length === 0) return [];
   const rows: ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>[] = [];
 
   // Un bouton par tâche : cocher se fait en un seul clic.

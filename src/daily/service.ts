@@ -139,7 +139,13 @@ export async function runPrepJob(client: Client): Promise<void> {
 // 7h — présentation de la journée
 // ---------------------------------------------------------------------------
 
-export async function runBoardJob(client: Client): Promise<void> {
+/**
+ * @param resolveType déduire le type quand rien n'a été choisi. Vrai pour le
+ * rendez-vous automatique de 7h (pas de réponse de la nuit = repos), faux
+ * quand l'utilisateur ouvre lui-même sa journée : il vient précisément la
+ * programmer, la déclarer en repos n'aurait aucun sens.
+ */
+export async function runBoardJob(client: Client, resolveType = true): Promise<void> {
   const channel = await fetchChannel(client);
   if (!channel) return;
 
@@ -155,7 +161,7 @@ export async function runBoardJob(client: Client): Promise<void> {
   const plan = await ensurePlan(userId(), channelId(), guildId, today);
   const tasks = await listTasks(plan.id);
 
-  const resolvedType = resolveDayType(plan.day_type, tasks.length);
+  const resolvedType = resolveType ? resolveDayType(plan.day_type, tasks.length) : plan.day_type;
   if (resolvedType !== plan.day_type) {
     logger.info({ id: plan.id, resolvedType }, 'type de journee deduit faute de reponse');
   }
