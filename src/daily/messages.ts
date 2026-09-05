@@ -1,242 +1,40 @@
 /**
- * Variantes de messages, pour que le bot ne répète pas la même phrase tous les
- * jours. Le ton suit celui du bot sport : tutoiement, direct, un emoji max.
+ * Messages du module journées.
  *
- * Les fonctions de clôture choisissent leur lot selon le taux de réalisation :
- * on ne parle pas de la même façon à une journée bouclée et à une journée à 0.
+ * Volontairement neutres et factuels : pas de variantes tirées au sort, pas
+ * d'encouragement, pas de reproche. Le bot énonce un état, l'interprétation
+ * est laissée à l'utilisateur. Un même contexte produit toujours le même
+ * texte, ce qui rend aussi le comportement prévisible et testable.
  */
-
-function pick(variants: string[]): string {
-  return variants[Math.floor(Math.random() * variants.length)] as string;
-}
 
 // --- 18h : préparation du lendemain ---------------------------------------
 
-const PREP_INTROS = [
-  'on prépare **{date}** ?',
-  'à quoi ressemble ta journée de **{date}** ?',
-  'c’est l’heure de poser **{date}** sur le papier 📝',
-  'qu’est-ce qui t’attend **{date}** ?',
-  'on cale le programme de **{date}** ?',
-  'dis-moi ce que tu veux abattre **{date}**.',
-  'petite projection : **{date}**, on fait quoi ?',
-  'la journée de **{date}** est encore vierge — on la remplit ?',
-  'demain c’est **{date}**. Tu veux en faire quoi ?',
-  'liste du jour pour **{date}** : je t’écoute.',
-  '**{date}**, au programme ?',
-  'balance ta liste pour **{date}**.',
-  '**{date}** : tu notes quoi ?',
-  'on remplit **{date}** ?',
-];
-
 export function prepIntro(date: string): string {
-  return pick(PREP_INTROS).replace('{date}', date);
+  return `préparation de la journée du **${date}**.`;
 }
 
 // --- 7h : ouverture de la journée -----------------------------------------
 
-const BOARD_INTROS = [
-  'voici ta journée 👇',
-  'au programme aujourd’hui 👇',
-  'ta feuille de route du jour 👇',
-  'c’est parti, voilà le plan ☕',
-  'debout, voici ce qui t’attend 👇',
-  'ta journée est prête, plus qu’à cocher ✅',
-  'on attaque — voilà le programme 💪',
-  'le menu du jour 👇',
-  'allez, au boulot. Voilà la liste 🔥',
-  'journée lancée. Tout est là 👇',
-  'ce que t’as noté hier soir 👇',
-  'ton plan de bataille du jour ⚔️',
-  'la liste du jour, telle quelle 👇',
-  'tout est écrit, y a plus qu’à 👇',
-];
-
-const BOARD_INTROS_EMPTY = [
-  'aucune tâche prévue aujourd’hui — tu peux en ajouter ci-dessous.',
-  'ta journée est vide pour l’instant. Tu ajoutes quelque chose ?',
-  'rien de planifié aujourd’hui. Journée libre, ou tu remplis ?',
-  'page blanche pour aujourd’hui — à toi de voir.',
-  'rien au programme. Ajoute une tâche si ce n’est pas volontaire.',
-  'journée vierge. Repos assumé ou oubli ?',
-  'aucune tâche enregistrée pour aujourd’hui 👇',
-  'rien d’écrit aujourd’hui.',
-];
-
-const BOARD_INTROS_REST = [
-  'aujourd’hui c’est repos 🛌 Rien au programme.',
-  'journée de repos 🌴 Profite.',
-  'off aujourd’hui 😌 Rien à cocher.',
-  'repos prévu aujourd’hui ☕ Bonne journée.',
-  'journée off 🛋️ Tu peux ignorer ce salon.',
-];
-
 export function boardIntro(taskCount: number, isRest = false): string {
-  if (isRest) return pick(BOARD_INTROS_REST);
-  return taskCount > 0 ? pick(BOARD_INTROS) : pick(BOARD_INTROS_EMPTY);
+  if (isRest) return 'journée de repos.';
+  if (taskCount === 0) return 'aucune tâche enregistrée pour aujourd’hui.';
+  return 'tâches du jour.';
 }
 
 // --- Pied de page de la checklist ------------------------------------------
 
-const BOARD_FOOTERS = [
-  'Clique sur un numéro pour cocher',
-  'Un clic sur le numéro et c’est coché',
-  'Coche au fil de la journée',
-  'Les numéros correspondent aux boutons',
-  'Une tâche finie, un clic',
-];
-
-const ALL_DONE_FOOTERS = [
-  'Tout est fait, bravo',
-  'Journée bouclée, chapeau',
-  'Sans faute aujourd’hui',
-  'Rien qui traîne, propre',
-  'Carton plein',
-  'Liste vidée, respect',
-  'Zéro reste. Parfait',
-];
-
 /**
- * Le pied de page est recalculé à chaque coche : un tirage aléatoire le ferait
- * sauter d'un texte à l'autre sous les yeux. On le fixe donc par journée, via
- * l'identifiant du plan — stable dans la journée, différent le lendemain.
+ * `seed` n'est plus utilisé — il servait à figer une variante aléatoire par
+ * journée. Conservé dans la signature tant que l'appelant le fournit.
  */
-export function boardFooter(allDone: boolean, seed: number): string {
-  const variants = allDone ? ALL_DONE_FOOTERS : BOARD_FOOTERS;
-  return variants[Math.abs(seed) % variants.length] as string;
+export function boardFooter(allDone: boolean, _seed?: number): string {
+  return allDone ? 'Toutes les tâches sont cochées' : 'Clique sur un numéro pour cocher';
 }
 
 // --- Clôture de la journée -------------------------------------------------
 
-// Constat, pas coaching : on annonce le résultat, on ne fait pas la morale.
-const CLOSE_PERFECT = [
-  '🏆 **{done}/{total}**. Journée parfaite.',
-  '🎉 **{done}/{total}** — rien n’est passé à la trappe.',
-  '💯 **{done}/{total}**. Zéro déchet.',
-  '🔥 **{done}/{total}**. Carton plein, machine.',
-  '👑 **{done}/{total}**. Masterclass.',
-  '🚀 **{done}/{total}**. Tout bouclé, rien qui traîne.',
-  '💪 **{done}/{total}**. Celle-là, tu l’as pas volée.',
-  '🎯 **{done}/{total}**. 100 %. Propre.',
-  '⭐ **{done}/{total}**. Sans faute.',
-  '🥇 **{done}/{total}**. Liste vidée.',
-  '😎 **{done}/{total}**. Tranquille. Tu peux couper.',
-  '🧨 **{done}/{total}**. T’as tout explosé.',
-  '✨ **{done}/{total}**. Nickel.',
-  '🍻 **{done}/{total}**. Soirée peinard.',
-  '🧊 **{done}/{total}**. Ça, c’est fait. Au suivant.',
-  '🎬 **{done}/{total}**. Rideau, journée pliée.',
-  '🏁 **{done}/{total}**. Fin de journée, plus rien au tableau.',
-  '👏 **{done}/{total}**. Impeccable.',
-  '🛌 **{done}/{total}**. Journée pliée, bon repos.',
-  '🌙 **{done}/{total}**. Rien qui traîne — bonne soirée.',
-  '☕ **{done}/{total}**. Tout est fait, pose-toi.',
-  '🛋️ **{done}/{total}**. Terminé. Coupe et profite de ta soirée.',
-  '😴 **{done}/{total}**. Journée bouclée, repose-toi bien.',
-  '🎮 **{done}/{total}**. Liste vide, soirée libre.',
-];
-
-const CLOSE_GOOD = [
-  '👍 **{done}/{total}**. Le gros est passé.',
-  '✅ **{done}/{total}** — bonne journée.',
-  '💪 **{done}/{total}**. T’as bossé, ça se voit.',
-  '🙂 **{done}/{total}**. Pas parfait, mais correct.',
-  '👌 **{done}/{total}**. Ça tient la route.',
-  '🔋 **{done}/{total}**. Journée honnête.',
-  '😌 **{done}/{total}**. L’essentiel est fait.',
-  '🎯 **{done}/{total}**. Le principal y est.',
-  '🙌 **{done}/{total}**. Journée productive.',
-  '⚡ **{done}/{total}**. Bon rythme.',
-  '📦 **{done}/{total}**. Emballé, c’est pesé.',
-  '🆗 **{done}/{total}**. Rien à redire.',
-  '🌙 **{done}/{total}**. Bonne soirée.',
-  '🛋️ **{done}/{total}**. Le gros est passé, pose-toi.',
-  '☕ **{done}/{total}**. Ça suffit pour aujourd’hui, repose-toi.',
-];
-
-// En dessous de la moitié, le ton pique. En dessous de tout, il mord.
-const CLOSE_PARTIAL = [
-  '😒 **{done}/{total}**. Tu appelles ça une journée de travail, connard ?',
-  '🥱 **{done}/{total}** — minimum syndical, bravo la feignasse.',
-  '📉 **{done}/{total}**. T’as lâché en route comme la merde que tu es.',
-  '🫤 **{done}/{total}**. C’est faiblard, franchement.',
-  '🤏 **{done}/{total}**. Maigre. Pitoyable, guignol.',
-  '⌛ **{done}/{total}** — le reste, c’est pour quand exactement, branleur ?',
-  '😤 **{done}/{total}**. À moitié fait, comme tout ce que t’entreprends.',
-  '🙄 **{done}/{total}**. T’as fait le facile et t’as fui le reste, comme d’hab.',
-  '🥴 **{done}/{total}**. Molasson. T’avais mieux à donner et tu le sais.',
-  '🧊 **{done}/{total}**. Tiède. Ta journée est tiède. Comme toi.',
-  '📵 **{done}/{total}**. Combien d’heures sur ton téléphone pour en arriver là ?',
-  '🐌 **{done}/{total}**. À ce rythme tu finiras ta liste en novembre.',
-  '💤 **{done}/{total}**. T’as travaillé ou t’as fait semblant ?',
-  '🤨 **{done}/{total}**. La moitié. Tu te contentes vraiment de ça ?',
-];
-
-const CLOSE_NONE = [
-  '🤬 **0/{total}**. Espèce de connard, réveille-toi.',
-  '🤬 **0/{total}**. Enculé, retourne bosser.',
-  '🤬 **0/{total}**. T’as rien branlé de la journée, sale merde.',
-  '🤬 **0/{total}** — {total} tâches, zéro faite. T’es qu’un putain de déchet.',
-  '🤬 **0/{total}**. Bouge ton gros cul de feignasse, ça devient pathétique.',
-  '🤬 **0/{total}**. Grosse loque. T’as gâché une journée entière de ta vie.',
-  '🤬 **0/{total}**. Arrête de scroller comme un abruti et va bosser, bordel.',
-  '🤬 **0/{total}**. Zéro pointé. T’es une honte ambulante.',
-  '🤬 **0/{total}**. T’as la motivation d’une huître crevée. Lamentable.',
-  '🤬 **0/{total}**. Tocard. {total} trucs à faire et t’as préféré glander.',
-  '🤬 **0/{total}**. Tu te plains de pas avancer ? Regarde ce chiffre, guignol.',
-  '🤬 **0/{total}**. Journée de merde par un mec qui se cherche des excuses.',
-  '🤬 **0/{total}**. Même pas UNE. T’es sérieux là ?',
-  '🤬 **0/{total}**. Bravo champion du monde de la glandouille.',
-  '🤬 **0/{total}**. T’as écrit cette liste hier soir et t’as tout ignoré. Minable.',
-  '🤬 **0/{total}**. Une journée de perdue. Il t’en reste combien, tu crois ?',
-  '🤬 **0/{total}**. T’es le seul responsable de ce chiffre. Assume, tocard.',
-  '🤬 **0/{total}**. Nul. Absolument nul.',
-  '🤬 **0/{total}**. Tu veux des résultats mais tu fais rien, abruti.',
-  '🤬 **0/{total}**. Grosse feignasse. Même pas une tâche, même pas la plus courte.',
-  '🤬 **0/{total}**. T’as passé la journée à te mentir. Bravo l’artiste.',
-  '🤬 **0/{total}**. Zéro. Le mot est court, l’excuse le sera aussi.',
-];
-
-// Journée déclarée en repos : aucun reproche, quoi qu'il y ait dans la liste.
-const CLOSE_REST = [
-  '🛌 Journée de repos. Rien à comptabiliser.',
-  '🌴 Repos assumé. On archive et on n’en parle plus.',
-  '😌 Journée off. C’était prévu, c’est très bien.',
-  '🛋️ Repos. Aucun objectif, aucun reproche.',
-  '☕ Journée de repos bien méritée.',
-  '🌙 Off aujourd’hui. Bon repos.',
-];
-
-const CLOSE_REST_WITH_TASKS = [
-  '🛌 Journée de repos, et t’as quand même bouclé **{done}/{total}**. Bonus.',
-  '🌴 Off, mais **{done}/{total}** de fait. Personne te demandait ça.',
-  '😌 Repos avec **{done}/{total}** au compteur. Tranquille.',
-];
-
-const CLOSE_EMPTY = [
-  '📄 Journée sans tâche, archivée telle quelle.',
-  '🌙 Rien au programme aujourd’hui — c’est noté.',
-  '📄 Journée vide, rien à archiver de plus.',
-  '🗓️ Aucune tâche prévue. Journée off assumée.',
-];
-
 export function closingLine(done: number, total: number, isRest = false): string {
-  if (isRest) {
-    if (done === 0) return pick(CLOSE_REST);
-    return pick(CLOSE_REST_WITH_TASKS)
-      .replaceAll('{done}', String(done))
-      .replaceAll('{total}', String(total));
-  }
-  if (total === 0) return pick(CLOSE_EMPTY);
-  const ratio = done / total;
-  const variants =
-    ratio === 1
-      ? CLOSE_PERFECT
-      : ratio >= 0.5
-        ? CLOSE_GOOD
-        : ratio > 0
-          ? CLOSE_PARTIAL
-          : CLOSE_NONE;
-  // replaceAll : certaines variantes répètent {total} dans la même phrase.
-  return pick(variants).replaceAll('{done}', String(done)).replaceAll('{total}', String(total));
+  const prefix = isRest ? 'Journée de repos close.' : 'Journée close.';
+  if (total === 0) return `${prefix} Aucune tâche enregistrée.`;
+  return `${prefix} ${done}/${total} tâche(s) cochée(s).`;
 }

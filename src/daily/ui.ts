@@ -82,10 +82,10 @@ export function buildPrepEmbed(
     .setTitle(`${rest ? '🛌' : '📝'} ${capitalize(formatPlanDate(plan.plan_date))}`)
     .setDescription(
       rest && tasks.length === 0
-        ? '*Journée de repos.* Rien d’obligatoire — tu peux quand même ajouter des tâches avec **➕**.'
+        ? 'Journée de repos. Aucun objectif.\n**➕** permet malgré tout d’ajouter une tâche.'
         : tasks.length > 0
           ? truncate(taskLines(tasks), 3800)
-          : '*Ta liste est vide.*\nAjoute tes tâches avec **➕**, ou choisis un type de journée ci-dessous.',
+          : 'Aucune tâche enregistrée.\n**➕** pour en ajouter, ou choisis un type de journée.',
     );
 
   if (pending.length > 0) {
@@ -97,10 +97,10 @@ export function buildPrepEmbed(
 
   embed.setFooter({
     text: rest
-      ? 'Repos — rien ne te sera reproché demain'
+      ? 'Journée de repos'
       : plan.day_type === 'undecided' && tasks.length === 0
-        ? 'Sans réponse de ta part, demain sera compté comme du repos'
-        : 'Présentée demain à 7h, prête à cocher',
+        ? 'Sans réponse, la journée sera enregistrée comme repos'
+        : 'Publiée demain à 7h',
   });
   return embed;
 }
@@ -184,22 +184,22 @@ export function buildBoardEmbed(plan: DayPlanRow, tasks: DailyTaskRow[]): EmbedB
 
   const embed = new EmbedBuilder()
     .setColor(closed ? COLOR_CLOSED : rest ? COLOR_REST : allDone ? COLOR_DONE : COLOR_BOARD)
-    .setAuthor({ name: closed ? 'Journée archivée' : rest ? 'Journée de repos' : 'Ta journée' })
+    .setAuthor({ name: closed ? 'Journée archivée' : rest ? 'Journée de repos' : 'Journée' })
     .setTitle(
-      `${closed ? '🏁' : rest ? '🛌' : allDone ? '🎉' : '☀️'} ${capitalize(formatPlanDate(plan.plan_date))}`,
+      `${closed ? '🏁' : rest ? '🛌' : '☀️'} ${capitalize(formatPlanDate(plan.plan_date))}`,
     );
 
   if (rest && tasks.length === 0) {
     embed.setDescription(
-      '*Journée de repos.* Aucun objectif aujourd’hui — tu peux quand même ajouter une tâche avec **➕**.',
+      'Journée de repos. Aucun objectif.\n**➕** permet malgré tout d’ajouter une tâche.',
     );
-    embed.setFooter({ text: closed ? 'Repos archivé' : 'Profite' });
+    embed.setFooter({ text: closed ? 'Repos archivé' : 'Journée de repos' });
     return embed;
   }
 
   if (tasks.length === 0) {
     embed.setDescription(
-      '*Aucune tâche pour aujourd’hui.*\nAjoute-en avec **➕ Ajouter une tâche**.',
+      'Aucune tâche enregistrée pour aujourd’hui.\n**➕** pour en ajouter.',
     );
   } else {
     embed.setDescription(
