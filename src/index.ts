@@ -95,7 +95,11 @@ async function main(): Promise<void> {
     if (dailyEnabled) {
       startDailyJobs(client);
     } else {
-      logger.info('journées de travail désactivées (DAILY_CHANNEL_ID / DAILY_USER_ID absents)');
+      logger.info(
+        config.DAILY_PAUSED
+          ? 'journées de travail en veille (DAILY_PAUSED)'
+          : 'journées de travail désactivées (DAILY_CHANNEL_ID / DAILY_USER_ID absents)',
+      );
     }
   });
 

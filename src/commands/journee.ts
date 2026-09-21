@@ -32,8 +32,9 @@ const data = new SlashCommandBuilder()
 async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   if (!dailyEnabled) {
     await interaction.reply({
-      content:
-        '⚠️ Les journées de travail ne sont pas configurées (`DAILY_CHANNEL_ID` / `DAILY_USER_ID`).',
+      content: config.DAILY_PAUSED
+        ? '⏸️ Les journées de travail sont en veille (`DAILY_PAUSED`).'
+        : '⚠️ Les journées de travail ne sont pas configurées (`DAILY_CHANNEL_ID` / `DAILY_USER_ID`).',
       flags: MessageFlags.Ephemeral,
     });
     return;

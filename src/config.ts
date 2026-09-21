@@ -16,6 +16,12 @@ const schema = z.object({
   DAILY_USER_ID: z.string().optional(),
   DAILY_PREP_CRON: z.string().default('0 18 * * *'),
   DAILY_BOARD_CRON: z.string().default('0 7 * * *'),
+  // En veille par défaut : ni préparation de 18h, ni checklist de 7h, ni /journee.
+  // Mettre DAILY_PAUSED=false pour relancer.
+  DAILY_PAUSED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 
   // --- Archivage Google Sheets (optionnel) ---
   // Une clé API ne peut PAS écrire dans un Sheet : il faut un compte de service.
@@ -34,8 +40,11 @@ for (const key of Object.keys(schema.shape)) {
 
 export const config: AppConfig = schema.parse(cleaned);
 
-/** Les journées de travail ne tournent que si salon + utilisateur sont configurés. */
-export const dailyEnabled = Boolean(config.DAILY_CHANNEL_ID && config.DAILY_USER_ID);
+/** Salon + utilisateur définis : la fonctionnalité est utilisable. */
+export const dailyConfigured = Boolean(config.DAILY_CHANNEL_ID && config.DAILY_USER_ID);
+
+/** Les journées de travail ne tournent que si elles sont configurées et pas en veille. */
+export const dailyEnabled = dailyConfigured && !config.DAILY_PAUSED;
 
 // Diagnostic log on boot: confirm injected values are well-formed (no secret leak).
 const sk = config.SUPABASE_SERVICE_ROLE_KEY;
@@ -48,7 +57,9 @@ console.log(
 console.log(`[config] SUPABASE_URL=${config.SUPABASE_URL}`);
 // eslint-disable-next-line no-console
 console.log(
-  `[config] journées=${dailyEnabled ? 'activées' : 'désactivées'} sheets=${
+  `[config] journées=${
+    dailyEnabled ? 'activées' : config.DAILY_PAUSED ? 'en veille' : 'désactivées'
+  } sheets=${
     config.GOOGLE_SERVICE_ACCOUNT_JSON ? 'compte de service' : 'non configuré'
   }`,
 );
