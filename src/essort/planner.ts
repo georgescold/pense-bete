@@ -2,7 +2,7 @@ import type { EssortPerson } from '../config';
 import type { Lead } from './airtable';
 
 /**
- * Transforme les leads Airtable en agenda du jour, par personne.
+ * Transforme les leads Airtable en agenda par personne : le jour et la semaine.
  *
  * Fonctions pures (aucun accès réseau ni base) : tout se teste avec des
  * leads fabriqués et une date « aujourd'hui » imposée.
@@ -10,16 +10,18 @@ import type { Lead } from './airtable';
  * Règles de lecture :
  *  - la date de référence est « date de la prochaine action » ;
  *  - à défaut, on la lit dans « Prochain événement » (« jeudi 08/10 »,
- *    « fin octobre »…), en le signalant ;
+ *    « fin octobre »…) ;
+ *  - l'heure vient de « Prochain événement » (« à 11h »), si ce texte parle
+ *    bien du même jour ;
  *  - « Gestion » désigne le tableau (Loys ou Enzo) ;
  *  - un lead « dead » disparaît ;
- *  - échu (date ≤ aujourd'hui) = tâche à cocher, en retard compris ;
- *  - dans les jours qui suivent = « à venir », pour préparer ;
- *  - aucune date trouvable = rappel « sans date » pour compléter Airtable.
+ *  - échu (date ≤ aujourd'hui) = tâche du jour, en retard compris ;
+ *  - dans les 6 jours suivants = planning de la semaine.
  */
 
 export const PEOPLE: readonly EssortPerson[] = ['Loys', 'Enzo'];
-export const UPCOMING_DAYS = 3;
+/** La semaine affichée : les 6 jours qui suivent aujourd'hui. */
+export const WEEK_DAYS = 6;
 
 // ---------------------------------------------------------------------------
 // Dates murales 'YYYY-MM-DD' (aucun fuseau : ce sont des jours, pas des instants)
@@ -139,6 +141,17 @@ export function parseEventDate(text: string | null, today: string): string | nul
   return null;
 }
 
+// « 11h », « 10 h », « 16h30 », « 14:30 ». Pas « 24h » ni un chiffre isolé.
+const TIME = /(?<![\d:.])([01]?\d|2[0-3])\s*(?:h|:)\s*([0-5]\d)?(?![\d])/;
+
+/** Première heure écrite dans un texte, au format 'HH:MM'. */
+export function parseTime(text: string | null): string | null {
+  if (!text) return null;
+  const m = TIME.exec(text.toLowerCase());
+  if (!m) return null;
+  return `${m[1]!.padStart(2, '0')}:${m[2] ?? '00'}`;
+}
+
 export interface DueDate {
   date: string;
   /** Vrai si la date vient du texte « Prochain événement » et non du champ date. */
@@ -232,14 +245,22 @@ function truncateText(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 }
 
+/**
+ * L'heure de l'action : celle de « Prochain événement », sauf si ce texte
+ * parle d'un autre jour (« Lundi 12/10 à 11h » pour une préparation le 08/10).
+ */
+export function dueTime(lead: Lead, due: DueDate, today: string): string | null {
+  const eventDate = parseEventDate(lead.prochainEvenement, today);
+  if (eventDate && eventDate !== due.date) return null;
+  return parseTime(lead.prochainEvenement);
+}
+
+/** Juste ce qu'il faut pour agir : la consigne, le téléphone, un retard éventuel. */
 export function taskDetails(lead: Lead, due: DueDate, today: string): string {
   const parts: string[] = [];
-  if (lead.prochainEvenement) parts.push(truncateText(lead.prochainEvenement, 140));
+  if (lead.prochainEvenement) parts.push(truncateText(lead.prochainEvenement, 120));
   if (lead.telephone) parts.push(`☎ ${lead.telephone}`);
-  if (lead.verdict) parts.push(lead.verdict);
-  const late = daysBetween(due.date, today);
-  if (late > 0) parts.push(`⏰ prévu le ${shortDate(due.date)} (${late} j de retard)`);
-  if (due.inferred) parts.push('date lue dans « Prochain événement »');
+  if (daysBetween(due.date, today) > 0) parts.push(`prévu le ${shortDate(due.date)}`);
   return parts.join(' · ');
 }
 
@@ -258,24 +279,25 @@ export interface DueTask {
   label: string;
   details: string;
   dueDate: string;
+  /** 'HH:MM' ou null. */
+  time: string | null;
 }
 
 export interface UpcomingItem {
   date: string;
+  time: string | null;
   label: string;
 }
 
 export interface PersonAgenda {
+  /** À faire aujourd'hui (retards compris). */
   due: DueTask[];
+  /** Les 6 jours suivants. */
   upcoming: UpcomingItem[];
-  /** Leads suivis sans aucune date exploitable. */
-  undated: string[];
 }
 
 export interface Agenda {
   people: Record<EssortPerson, PersonAgenda>;
-  /** Leads actifs dont « Gestion » est vide : affichés à tout le monde. */
-  unassigned: string[];
 }
 
 function personOf(lead: Lead): EssortPerson | null {
@@ -292,36 +314,29 @@ function heat(lead: Lead): number {
   return 3;
 }
 
-export function buildAgenda(leads: Lead[], today: string, upcomingDays = UPCOMING_DAYS): Agenda {
+/** Tri d'une journée : les heures fixes d'abord, dans l'ordre. */
+export function compareTime(a: string | null, b: string | null): number {
+  if (a && b) return a.localeCompare(b);
+  if (a) return -1;
+  if (b) return 1;
+  return 0;
+}
+
+export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS): Agenda {
   const people = Object.fromEntries(
-    PEOPLE.map((p) => [p, { due: [], upcoming: [], undated: [] } as PersonAgenda]),
+    PEOPLE.map((p) => [p, { due: [], upcoming: [] } as PersonAgenda]),
   ) as Record<EssortPerson, PersonAgenda>;
-  const unassigned: string[] = [];
-  const order = new Map<string, [string, number]>();
+  const heats = new Map<string, number>();
 
   for (const lead of leads) {
-    const kind = actionKind(lead.action);
-    if (kind === 'dead') continue;
-
+    if (actionKind(lead.action) === 'dead') continue;
     const person = personOf(lead);
     const due = resolveDueDate(lead, today);
-
-    if (!person) {
-      // Les simples inscrits (guide, observatoire) n'ont rien à faire ici :
-      // seuls comptent les leads déjà travaillés ou les vraies demandes.
-      if (kind !== 'none' || due || lead.type === 'Demande') {
-        unassigned.push(`${leadName(lead)} — ${lead.action ?? 'nouvelle demande'}`);
-      }
-      continue;
-    }
+    if (!person || !due) continue;
 
     const agenda = people[person];
-    if (!due) {
-      agenda.undated.push(`${leadName(lead)} — ${lead.action ?? 'aucune action'}`);
-      continue;
-    }
-
     const delta = daysBetween(today, due.date);
+    const time = dueTime(lead, due, today);
     if (delta <= 0) {
       agenda.due.push({
         recordId: lead.id,
@@ -329,21 +344,45 @@ export function buildAgenda(leads: Lead[], today: string, upcomingDays = UPCOMIN
         label: taskLabel(lead),
         details: taskDetails(lead, due, today),
         dueDate: due.date,
+        time,
       });
-      order.set(lead.id, [due.date, heat(lead)]);
-    } else if (delta <= upcomingDays) {
-      agenda.upcoming.push({ date: due.date, label: taskLabel(lead) });
+      heats.set(lead.id, heat(lead));
+    } else if (delta <= weekDays) {
+      agenda.upcoming.push({ date: due.date, time, label: taskLabel(lead) });
     }
   }
 
   for (const agenda of Object.values(people)) {
-    agenda.due.sort((a, b) => {
-      const [da, ha] = order.get(a.recordId) ?? [a.dueDate, 3];
-      const [db, hb] = order.get(b.recordId) ?? [b.dueDate, 3];
-      return da === db ? ha - hb : da < db ? -1 : 1;
-    });
-    agenda.upcoming.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    // Retards d'abord, puis par heure, puis les leads chauds.
+    agenda.due.sort(
+      (a, b) =>
+        a.dueDate.localeCompare(b.dueDate) ||
+        compareTime(a.time, b.time) ||
+        (heats.get(a.recordId) ?? 3) - (heats.get(b.recordId) ?? 3),
+    );
+    agenda.upcoming.sort((a, b) => a.date.localeCompare(b.date) || compareTime(a.time, b.time));
   }
 
-  return { people, unassigned };
+  return { people };
+}
+
+/**
+ * Heure tapée à la main : « 14h30 », « 14h », « 14:30 », « 9 ».
+ * Vide → null (pas d'heure) ; illisible → undefined.
+ */
+export function parseTimeInput(input: string): string | null | undefined {
+  const s = input.trim().toLowerCase();
+  if (!s) return null;
+  const m = /^([01]?\d|2[0-3])\s*(?:[h:]\s*([0-5]\d)?)?$/.exec(s);
+  if (!m) return undefined;
+  return `${m[1]!.padStart(2, '0')}:${m[2] ?? '00'}`;
+}
+
+/** 'YYYY-MM-DD' → 'jeudi' (ou 'jeu.' en court). */
+export function weekdayName(date: string, short = false): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12)).toLocaleDateString('fr-FR', {
+    weekday: short ? 'short' : 'long',
+    timeZone: 'UTC',
+  });
 }

@@ -22,6 +22,7 @@ import {
   buildSuccessEmbed,
 } from '../lib/embeds';
 import { startWizard } from './wizard';
+import { remindersChanged } from '../lib/reminderEvents';
 import { unpinReminder } from '../lib/pins';
 import type { Command } from './types';
 
@@ -242,6 +243,7 @@ async function handleSupprimer(
   await unpinReminder(interaction.client, row);
   await deleteReminder(id);
   ctx.scheduler.unschedule(id);
+  remindersChanged(interaction.client, interaction.user.id);
   await interaction.reply({
     embeds: [buildSuccessEmbed('🗑️ Rappel supprimé', `Le rappel #${id} a été supprimé.`)],
     flags: MessageFlags.Ephemeral,
@@ -281,6 +283,7 @@ async function handlePauseReprendre(
   } else {
     ctx.scheduler.schedule(updated);
   }
+  remindersChanged(interaction.client, interaction.user.id);
   await interaction.reply({
     embeds: [
       buildSuccessEmbed(

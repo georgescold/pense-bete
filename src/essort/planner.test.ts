@@ -4,9 +4,12 @@ import {
   actionKind,
   addDays,
   buildAgenda,
+  compareTime,
+  dueTime,
   leadName,
   padDate,
   parseEventDate,
+  parseTime,
   resolveDueDate,
   signatureOf,
   taskDetails,
@@ -119,14 +122,14 @@ describe('libellés', () => {
     );
   });
 
-  it('détaille l’événement, le téléphone, le retard et l’origine de la date', () => {
+  it('ne détaille que la consigne, le téléphone et un retard', () => {
     const l = lead({
       prochainEvenement: 'Rappel promis',
       telephone: '06 00 00 00 00',
       verdict: '🟢 Chaud',
     });
     expect(taskDetails(l, { date: '2026-10-05', inferred: true }, TODAY)).toBe(
-      'Rappel promis · ☎ 06 00 00 00 00 · 🟢 Chaud · ⏰ prévu le 05/10 (2 j de retard) · date lue dans « Prochain événement »',
+      'Rappel promis · ☎ 06 00 00 00 00 · prévu le 05/10',
     );
     expect(taskDetails(lead({}), { date: TODAY, inferred: false }, TODAY)).toBe('');
   });
@@ -138,6 +141,29 @@ describe('libellés', () => {
     expect(signatureOf({ ...l, action: 'R1' }, { date: '2026-10-08', inferred: false })).not.toBe(
       a,
     );
+  });
+});
+
+describe('heures', () => {
+  it('lit la première heure d’un texte', () => {
+    expect(parseTime('Jeudi 08/10 appel téléphonique à 11h')).toBe('11:00');
+    expect(parseTime('Lun. 12/10 à 10 h · R2')).toBe('10:00');
+    expect(parseTime('entre 16h30 et 17h')).toBe('16:30');
+    expect(parseTime('rdv 9:05')).toBe('09:05');
+    expect(parseTime('sous 24h')).toBeNull();
+    expect(parseTime('06.31.22.71.81')).toBeNull();
+    expect(parseTime(null)).toBeNull();
+  });
+
+  it('ne prend l’heure que si le texte parle du jour de l’action', () => {
+    const due = { date: '2026-10-08', inferred: false };
+    expect(dueTime(lead({ prochainEvenement: 'Jeudi 08/10 à 11h' }), due, TODAY)).toBe('11:00');
+    expect(dueTime(lead({ prochainEvenement: 'Lundi 12/10 à 11h - doc' }), due, TODAY)).toBeNull();
+    expect(dueTime(lead({ prochainEvenement: 'appel à 15h' }), due, TODAY)).toBe('15:00');
+  });
+
+  it('range les heures fixes d’abord', () => {
+    expect(['10:00', null, '09:00'].sort(compareTime)).toEqual(['09:00', '10:00', null]);
   });
 });
 
@@ -166,8 +192,24 @@ describe('buildAgenda', () => {
       dateAction: '2026-10-05',
       verdict: '🟢 Chaud',
     }),
-    lead({ id: 'recSOON', nom: 'Dina', action: 'R1', gestion: 'Enzo', dateAction: '2026-10-09' }),
-    lead({ id: 'recFAR', nom: 'Elie', action: 'R2', gestion: 'Enzo', dateAction: '2026-10-20' }),
+    lead({
+      id: 'recTIME',
+      nom: 'Jade',
+      action: 'R1',
+      gestion: 'Enzo',
+      dateAction: TODAY,
+      prochainEvenement: 'Mercredi 07/10 à 9h30',
+    }),
+    lead({
+      id: 'recSOON',
+      nom: 'Dina',
+      action: 'R1',
+      gestion: 'Enzo',
+      dateAction: '2026-10-09',
+      prochainEvenement: 'ven. 09/10 à 14h',
+    }),
+    lead({ id: 'recWEEK', nom: 'Elie', action: 'R2', gestion: 'Enzo', dateAction: '2026-10-13' }),
+    lead({ id: 'recFAR', nom: 'Fred', action: 'R2', gestion: 'Enzo', dateAction: '2026-10-20' }),
     lead({
       id: 'recTXT',
       nom: 'Fanny',
@@ -178,28 +220,33 @@ describe('buildAgenda', () => {
     lead({ id: 'recNODATE', nom: 'Gael', action: 'Attente de doc', gestion: 'Loys' }),
     lead({ id: 'recDEAD', nom: 'Hugo', action: 'dead', gestion: 'Loys', dateAction: TODAY }),
     lead({ id: 'recNOBODY', nom: 'Iris', action: 'a call', dateAction: TODAY }),
-    lead({ id: 'recGUIDE', email: 'lecteur@x.fr', type: 'Guide' }),
   ];
   const agenda = buildAgenda(leads, TODAY);
 
-  it('range les tâches échues par personne, les plus anciennes et chaudes d’abord', () => {
-    expect(agenda.people.Enzo.due.map((t) => t.recordId)).toEqual(['recHOT', 'recLATE', 'recDUE']);
+  it('range la journée : retards, puis heures fixes, puis leads chauds', () => {
+    expect(agenda.people.Enzo.due.map((t) => t.recordId)).toEqual([
+      'recHOT',
+      'recLATE',
+      'recTIME',
+      'recDUE',
+    ]);
+    expect(agenda.people.Enzo.due[2]!.time).toBe('09:30');
   });
 
-  it('annonce les prochains jours sans les rendre cochables', () => {
-    expect(agenda.people.Enzo.upcoming).toEqual([{ date: '2026-10-09', label: '🤝 R1 avec Dina' }]);
+  it('met les 6 jours suivants dans la semaine, avec l’heure', () => {
+    expect(agenda.people.Enzo.upcoming).toEqual([
+      { date: '2026-10-09', time: '14:00', label: '🤝 R1 avec Dina' },
+      { date: '2026-10-13', time: null, label: '🤝 R2 avec Elie' },
+    ]);
     expect(agenda.people.Loys.upcoming).toEqual([
-      { date: '2026-10-08', label: '🔁 Relancer Fanny' },
+      { date: '2026-10-08', time: null, label: '🔁 Relancer Fanny' },
     ]);
   });
 
-  it('signale les leads suivis sans date et ignore les leads morts', () => {
-    expect(agenda.people.Loys.undated).toEqual(['Gael — Attente de doc']);
+  it('ignore les leads morts, sans date ou sans responsable', () => {
     expect(agenda.people.Loys.due).toEqual([]);
-  });
-
-  it('remonte les leads sans responsable, pas les simples inscrits', () => {
-    expect(agenda.unassigned).toEqual(['Iris — a call']);
+    const all = [...agenda.people.Loys.due, ...agenda.people.Enzo.due].map((t) => t.recordId);
+    expect(all).not.toContain('recNOBODY');
   });
 
   it('une tâche du texte devient échue le jour venu', () => {

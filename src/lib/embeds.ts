@@ -89,7 +89,7 @@ export function buildReminderEmbed(r: ReminderRow, isEscalation = false): EmbedB
   return embed;
 }
 
-interface Occurrence {
+export interface Occurrence {
   date: Date;
   reminder: ReminderRow;
 }
@@ -121,7 +121,7 @@ function dayLabel(d: Date): string {
   return DAY_LABEL_FMT.format(d);
 }
 
-function expandOccurrences(rows: ReminderRow[], from: Date, to: Date): Occurrence[] {
+export function expandOccurrences(rows: ReminderRow[], from: Date, to: Date): Occurrence[] {
   const occs: Occurrence[] = [];
   for (const r of rows) {
     if (r.is_paused) continue;

@@ -3,11 +3,13 @@ import type { Client } from 'discord.js';
 import { config, essortMembers } from '../config';
 import { logger } from '../logger';
 import { hasFiredToday, withRetries } from '../daily/jobs';
-import { publishBoards, syncDoneTasks } from './service';
+import { onRemindersChanged } from '../lib/reminderEvents';
+import { publishBoards, refreshForUser, restoreTodayPings, syncDoneTasks } from './service';
 
 /**
- * Tous les jours à 6h (heure de Paris), un tableau par personne dans son salon,
- * puis relecture d'Airtable à 12h et 17h : le même message est mis à jour.
+ * Tous les jours à 6h (heure de Paris), dans le salon de chaque personne : le
+ * planning de la semaine puis le message du jour. Relecture d'Airtable à 12h
+ * et 17h : les mêmes messages sont mis à jour.
  *
  * Le rendez-vous passe aussi par la base Supabase chaque matin : il la garde
  * éveillée, alors qu'elle se mettait en pause faute d'activité.
@@ -56,5 +58,10 @@ export function startEssortJobs(client: Client): void {
   if (hasFiredToday(config.ESSORT_CRON)) {
     void withRetries('rattrapage Essort', () => publishBoards(client, true));
   }
+  // Les minuteurs des pings ne survivent pas à un redémarrage.
+  void withRetries('pings du jour', () => restoreTodayPings(client));
   void syncDoneTasks();
+
+  // Un rappel créé, mis en pause ou supprimé apparaît aussitôt dans le planning.
+  onRemindersChanged((c, userId) => refreshForUser(c, userId));
 }
