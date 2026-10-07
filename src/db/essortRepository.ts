@@ -2,11 +2,8 @@ import type { EssortPerson } from '../config';
 import { supabase } from './supabase';
 
 export interface BoardExtras {
-  upcoming?: { date: string; label: string }[];
-  undated?: string[];
-  unassigned?: string[];
-  /** Actions validées dont la date n'a pas bougé dans Airtable. */
-  stale?: { label: string; doneOn: string }[];
+  /** Actions Airtable des 6 jours suivants (planning de la semaine). */
+  upcoming?: { date: string; time: string | null; label: string }[];
   /** Dernière lecture d'Airtable en échec : la liste est incomplète. */
   airtableError?: boolean;
 }
@@ -16,7 +13,10 @@ export interface EssortBoardRow {
   person: EssortPerson;
   board_date: string; // 'YYYY-MM-DD', date murale Europe/Paris
   channel_id: string;
+  /** Message du jour (tâches à cocher). */
   message_id: string | null;
+  /** Message de la semaine, posté juste avant celui du jour. */
+  week_message_id: string | null;
   extras: BoardExtras;
   read_at: string | null;
   archived_at: string | null;
@@ -33,6 +33,9 @@ export interface EssortTaskRow {
   signature: string | null;
   label: string;
   details: string | null;
+  /** 'HH:MM', heure de Paris : ping à l'heure dite. */
+  due_time: string | null;
+  pinged_at: string | null;
   position: number;
   is_done: boolean;
   done_at: string | null;
@@ -44,13 +47,15 @@ export interface EssortTaskRow {
 }
 
 export type BoardPatch = Partial<
-  Pick<EssortBoardRow, 'message_id' | 'extras' | 'read_at' | 'archived_at'>
+  Pick<EssortBoardRow, 'message_id' | 'week_message_id' | 'extras' | 'read_at' | 'archived_at'>
 >;
 export type TaskPatch = Partial<
   Pick<
     EssortTaskRow,
     | 'label'
     | 'details'
+    | 'due_time'
+    | 'pinged_at'
     | 'signature'
     | 'position'
     | 'is_done'
@@ -164,7 +169,7 @@ export async function listTasksByIds(ids: number[]): Promise<EssortTaskRow[]> {
 
 export async function addTask(
   task: Pick<EssortTaskRow, 'board_id' | 'source' | 'label'> &
-    Partial<Pick<EssortTaskRow, 'record_id' | 'signature' | 'details' | 'position'>>,
+    Partial<Pick<EssortTaskRow, 'record_id' | 'signature' | 'details' | 'due_time' | 'position'>>,
 ): Promise<EssortTaskRow> {
   const { data, error } = await supabase.from(TASKS).insert(task).select().single();
   if (error) throw new Error(`addTask: ${error.message}`);
@@ -242,4 +247,27 @@ export async function listTasksToSync(): Promise<TaskWithBoard[]> {
     .order('done_at', { ascending: true });
   if (error) throw new Error(`listTasksToSync: ${error.message}`);
   return (data ?? []) as TaskWithBoard[];
+}
+
+/** Tâches planifiées à la main sur des jours à venir (bornes incluses). */
+export async function listPlannedTasks(
+  person: EssortPerson,
+  from: string,
+  to: string,
+): Promise<TaskWithBoard[]> {
+  const { data, error } = await supabase
+    .from(TASKS)
+    .select('*, essort_boards!inner(person, board_date)')
+    .eq('source', 'manual')
+    .is('dismissed_at', null)
+    .eq('essort_boards.person', person)
+    .gte('essort_boards.board_date', from)
+    .lte('essort_boards.board_date', to);
+  if (error) throw new Error(`listPlannedTasks: ${error.message}`);
+  return ((data ?? []) as TaskWithBoard[]).sort(
+    (a, b) =>
+      a.essort_boards.board_date.localeCompare(b.essort_boards.board_date) ||
+      (a.due_time ?? '99').localeCompare(b.due_time ?? '99') ||
+      a.id - b.id,
+  );
 }

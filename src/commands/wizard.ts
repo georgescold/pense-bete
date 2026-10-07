@@ -20,6 +20,7 @@ import { logger } from '../logger';
 import type { ParsedSchedule } from '../scheduler/parser';
 import { computeNextCronRun, type Scheduler } from '../scheduler/scheduler';
 import { insertReminder, updateReminder } from '../db/repository';
+import { remindersChanged } from '../lib/reminderEvents';
 import { buildAddedEmbed, buildErrorEmbed } from '../lib/embeds';
 import { pinMessage } from '../lib/pins';
 import { COLORS, COLOR_BY_KEY, DEFAULT_COLOR } from '../lib/presets';
@@ -435,7 +436,9 @@ function buildPayload(id: string, state: WizardState) {
 
 // --- Entrée ----------------------------------------------------------------
 
-export async function startWizard(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function startWizard(
+  interaction: ChatInputCommandInteraction | ButtonInteraction,
+): Promise<void> {
   gc();
   const wizardId = newId();
   const state: WizardState = {
@@ -776,6 +779,7 @@ async function onCreate(
 
   scheduler.schedule(inserted);
   STATES.delete(wizardId);
+  remindersChanged(interaction.client, state.userId);
 
   await interaction.update({ embeds: [buildAddedEmbed(inserted, parsed.humanReadable)], components: [] });
 

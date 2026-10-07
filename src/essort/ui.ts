@@ -3,18 +3,26 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  ModalBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from 'discord.js';
-import { config } from '../config';
-import type { EssortBoardRow, EssortTaskRow } from '../db/essortRepository';
-import { formatPlanDate } from '../daily/ui';
+import type { EssortBoardRow, EssortTaskRow, TaskWithBoard } from '../db/essortRepository';
 import { truncate } from '../lib/format';
-import { recordUrl } from './airtable';
-import { shortDate } from './planner';
+import { addDays, compareTime, shortDate, WEEK_DAYS, weekdayName } from './planner';
 
-const COLOR_OPEN = 0x5865f2; // bleu : journée en cours
+/**
+ * Deux messages par personne et par jour, dans cet ordre :
+ *  1. « Ta semaine » : les 6 jours suivants (pas aujourd'hui), pour voir venir
+ *     et planifier ;
+ *  2. « Aujourd'hui » : seulement ce qu'il y a à faire, à cocher.
+ */
+
+const COLOR_DAY = 0x5865f2; // bleu : journée en cours
 const COLOR_DONE = 0x57f287; // vert : tout est fait
+const COLOR_WEEK = 0xfaa61a; // ambre : ce qui arrive
 const COLOR_ARCHIVED = 0x4f545c; // gris : jour passé
 
 const BUTTONS_PER_ROW = 5;
@@ -23,6 +31,9 @@ const MAX_TASK_BUTTONS = 20;
 /** Au-delà, 3 lignes de boutons et le reste dans un menu (25 options max). */
 const BUTTONS_BEFORE_SELECT = 15;
 const MAX_OPTIONS = 25;
+/** Place réservée à une liste : un embed entier ne peut dépasser 6 000 caractères. */
+const LIST_BUDGET = 3500;
+const FIELD_BUDGET = 900;
 
 type Row = ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder>;
 
@@ -30,23 +41,13 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** 'YYYY-MM-DD' → 'ven. 09/10'. */
-function weekdayDate(date: string): string {
-  const [y, m, d] = date.split('-').map(Number);
-  const weekday = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12)).toLocaleDateString(
-    'fr-FR',
-    { weekday: 'short', timeZone: 'UTC' },
-  );
-  return `${weekday} ${shortDate(date)}`;
+/** 'YYYY-MM-DD' → 'Jeudi 08/10'. */
+export function dayLabel(date: string): string {
+  return `${capitalize(weekdayName(date))} ${shortDate(date)}`;
 }
 
-function parisTime(iso: string | null): string {
-  if (!iso) return '';
-  return new Date(iso).toLocaleTimeString('fr-FR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: config.TIMEZONE,
-  });
+function withTime(time: string | null, text: string): string {
+  return time ? `${time} · ${text}` : text;
 }
 
 function progressBar(done: number, total: number): string {
@@ -55,20 +56,26 @@ function progressBar(done: number, total: number): string {
   return `${'▰'.repeat(filled)}${'▱'.repeat(slots - filled)}  **${done}/${total}**`;
 }
 
-/** Place réservée à la liste : un embed entier ne peut dépasser 6 000 caractères. */
-const LIST_BUDGET = 2800;
-const FIELD_BUDGET = 600;
+// ---------------------------------------------------------------------------
+// Aujourd'hui
+// ---------------------------------------------------------------------------
+
+/**
+ * Ordre de la journée : les heures fixes d'abord, puis l'ordre d'arrivée.
+ * Les numéros des boutons suivent cet ordre : toujours passer par ici.
+ */
+export function dayOrder(tasks: EssortTaskRow[]): EssortTaskRow[] {
+  return [...tasks].sort(
+    (a, b) => compareTime(a.due_time, b.due_time) || a.position - b.position || a.id - b.id,
+  );
+}
 
 function taskLine(t: EssortTaskRow, position: number, withDetails: boolean): string {
   const num = `\`${String(position).padStart(2, ' ')}\``;
-  if (t.is_done) return `${num}  ~~${t.label}~~`;
-  const extra = withDetails
-    ? [t.details, t.record_id ? `[fiche Airtable](${recordUrl(t.record_id)})` : null].filter(
-        Boolean,
-      )
-    : [];
-  const sub = extra.length > 0 ? `\n      ↳ ${extra.join(' · ')}` : '';
-  return `${num}  **${t.label}**${sub}`;
+  const text = withTime(t.due_time, t.label);
+  if (t.is_done) return `${num}  ~~${text}~~`;
+  const sub = withDetails && t.details ? `\n      ↳ ${t.details}` : '';
+  return `${num}  **${text}**${sub}`;
 }
 
 /** Les détails s'effacent sur les dernières tâches si la liste déborde. */
@@ -88,74 +95,57 @@ function taskLines(tasks: EssortTaskRow[]): string {
   return truncate(lines.join('\n'), LIST_BUDGET);
 }
 
-function bullets(lines: string[], max = FIELD_BUDGET): string {
-  return truncate(lines.map((l) => `• ${l}`).join('\n'), max);
+/** Au-dessus du message du jour : la personne est toujours mentionnée. */
+export function dayIntro(mention: string | null, remaining: number, total: number): string {
+  const who = mention ? `${mention} ` : '';
+  if (total === 0) return `${who}Rien de prévu aujourd’hui.`;
+  if (remaining === 0) return `${who}Tout est fait aujourd’hui. ✅`;
+  return `${who}${remaining === 1 ? '1 tâche' : `${remaining} tâches`} aujourd’hui.`;
 }
 
-export function buildBoardEmbed(board: EssortBoardRow, tasks: EssortTaskRow[]): EmbedBuilder {
+export interface TimedLine {
+  time: string | null;
+  label: string;
+}
+
+/**
+ * @param tasks déjà dans l'ordre de `dayOrder`.
+ * @param reminders rappels du jour (ils se déclenchent seuls, rien à cocher ici).
+ */
+export function buildDayEmbed(
+  board: EssortBoardRow,
+  tasks: EssortTaskRow[],
+  reminders: TimedLine[] = [],
+): EmbedBuilder {
   const done = tasks.filter((t) => t.is_done).length;
   const archived = Boolean(board.archived_at);
   const allDone = tasks.length > 0 && done === tasks.length;
-  const extras = board.extras ?? {};
 
   const embed = new EmbedBuilder()
-    .setColor(archived ? COLOR_ARCHIVED : allDone ? COLOR_DONE : COLOR_OPEN)
-    .setAuthor({ name: `Essort · ${board.person}` })
-    .setTitle(`${archived ? '🏁' : '☀️'} ${capitalize(formatPlanDate(board.board_date))}`)
+    .setColor(archived ? COLOR_ARCHIVED : allDone ? COLOR_DONE : COLOR_DAY)
+    .setTitle(`${archived ? '🏁' : '☀️'} Aujourd’hui · ${dayLabel(board.board_date)}`)
     .setDescription(
       tasks.length === 0
-        ? 'Aucune tâche aujourd’hui.\n**➕** pour en ajouter une.'
+        ? 'Rien de prévu.'
         : `${progressBar(done, tasks.length)}\n​\n${taskLines(tasks)}`,
     );
 
-  if (extras.airtableError) {
+  if (reminders.length > 0) {
+    embed.addFields({
+      name: '⏰ Rappels',
+      value: truncate(reminders.map((r) => withTime(r.time, r.label)).join('\n'), FIELD_BUDGET),
+    });
+  }
+  if (board.extras?.airtableError && !archived) {
     embed.addFields({
       name: '⚠️ Airtable injoignable',
-      value: 'La lecture a échoué : la liste peut être incomplète. **🔄** pour réessayer.',
+      value: 'La liste peut être incomplète, nouvelle lecture à la prochaine actualisation.',
     });
   }
-  if (extras.stale?.length) {
-    embed.addFields({
-      name: '📝 Fait, date à changer dans Airtable',
-      value: bullets(extras.stale.map((s) => `${s.label} (validé le ${shortDate(s.doneOn)})`)),
-    });
-  }
-  if (extras.upcoming?.length) {
-    embed.addFields({
-      name: '📅 À venir',
-      value: bullets(extras.upcoming.map((u) => `${weekdayDate(u.date)} · ${u.label}`)),
-    });
-  }
-  if (extras.undated?.length) {
-    embed.addFields({
-      name: '🗓️ Sans date de prochaine action',
-      value: bullets(extras.undated),
-    });
-  }
-  if (extras.unassigned?.length) {
-    embed.addFields({
-      name: '🆕 Sans responsable dans Airtable',
-      value: bullets(extras.unassigned),
-    });
-  }
-
-  embed.setFooter({
-    text: archived
-      ? 'Journée passée'
-      : `${board.read_at ? `Airtable lu à ${parisTime(board.read_at)}` : 'Airtable non lu'} · une tâche validée part dans le Google Sheet`,
-  });
   return embed;
 }
 
-/** Intro au-dessus de l'embed : la mention ne sert que s'il y a quelque chose à faire. */
-export function boardIntro(mention: string | null, remaining: number, total: number): string {
-  if (total === 0) return 'Rien à faire aujourd’hui côté Essort.';
-  if (remaining === 0) return 'Tout est fait pour aujourd’hui. ✅';
-  const count = remaining === 1 ? '1 tâche' : `${remaining} tâches`;
-  return `${mention ? `${mention} ` : ''}${count} aujourd’hui.`;
-}
-
-export function buildBoardComponents(board: EssortBoardRow, tasks: EssortTaskRow[]): Row[] {
+export function buildDayComponents(board: EssortBoardRow, tasks: EssortTaskRow[]): Row[] {
   if (board.archived_at) return [];
   const rows: Row[] = [];
 
@@ -213,20 +203,12 @@ export function buildBoardComponents(board: EssortBoardRow, tasks: EssortTaskRow
         .setEmoji('🗑️')
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(tasks.length === 0),
-      new ButtonBuilder()
-        .setCustomId(`essort:refresh:${board.id}`)
-        .setLabel('Relire Airtable')
-        .setEmoji('🔄')
-        .setStyle(ButtonStyle.Secondary),
     ) as Row,
   );
   return rows;
 }
 
-/**
- * Menu « que retirer ? », affiché à la seule personne qui a cliqué : il ne
- * prend aucune des 5 lignes du tableau. Numéros identiques à ceux de la liste.
- */
+/** Menu « que retirer ? » du jour, visible de la seule personne qui a cliqué. */
 export function buildRemoveMenu(
   board: EssortBoardRow,
   tasks: EssortTaskRow[],
@@ -242,14 +224,155 @@ export function buildRemoveMenu(
         options.map((t, i) =>
           new StringSelectMenuOptionBuilder()
             .setValue(String(t.id))
-            .setLabel(truncate(`${i + 1}. ${t.label}`, 100))
+            .setLabel(truncate(`${i + 1}. ${withTime(t.due_time, t.label)}`, 100))
             .setDescription(
-              t.is_done
-                ? 'Faite (sa ligne sera effacée du Sheet)'
-                : t.source === 'airtable'
-                  ? 'Airtable : ne reviendra pas tant que le lead ne change pas'
-                  : 'Ajoutée à la main',
+              t.source === 'airtable'
+                ? 'Ne reviendra pas tant que le lead ne change pas dans Airtable'
+                : 'Ajoutée à la main',
             ),
+        ),
+      ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// La semaine
+// ---------------------------------------------------------------------------
+
+export type WeekItemKind = 'airtable' | 'planned' | 'reminder';
+
+export interface WeekItem {
+  date: string;
+  time: string | null;
+  label: string;
+  kind: WeekItemKind;
+}
+
+function weekItemText(item: WeekItem): string {
+  const label = item.kind === 'reminder' ? `⏰ ${item.label}` : item.label;
+  return item.time ? `\`${item.time}\` ${label}` : label;
+}
+
+/** Les 6 jours qui suivent le tableau, un bloc par jour, même vide. */
+export function buildWeekEmbed(board: EssortBoardRow, items: WeekItem[]): EmbedBuilder {
+  const days = Array.from({ length: WEEK_DAYS }, (_, i) => addDays(board.board_date, i + 1));
+  const blocks = days.map((date) => {
+    const lines = items
+      .filter((it) => it.date === date)
+      .sort((a, b) => compareTime(a.time, b.time))
+      .map(weekItemText);
+    return `**${dayLabel(date)}**\n${lines.length > 0 ? lines.join('\n') : '*Rien de prévu*'}`;
+  });
+  const first = days[0]!;
+  const last = days[days.length - 1]!;
+
+  return new EmbedBuilder()
+    .setColor(board.archived_at ? COLOR_ARCHIVED : COLOR_WEEK)
+    .setTitle(
+      `📅 Ta semaine · ${weekdayName(first, true)} ${shortDate(first)} → ${weekdayName(last, true)} ${shortDate(last)}`,
+    )
+    .setDescription(truncate(blocks.join('\n\n'), 4000));
+}
+
+export function buildWeekComponents(board: EssortBoardRow, plannedCount: number): Row[] {
+  if (board.archived_at) return [];
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`essort:plan:${board.id}`)
+        .setLabel('Planifier')
+        .setEmoji('➕')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`essort:unplan:${board.id}`)
+        .setLabel('Retirer')
+        .setEmoji('🗑️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(plannedCount === 0),
+      new ButtonBuilder()
+        .setCustomId('rpanel:open')
+        .setLabel('Rappels')
+        .setEmoji('⏰')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`essort:refresh:${board.id}`)
+        .setLabel('Actualiser')
+        .setEmoji('🔄')
+        .setStyle(ButtonStyle.Secondary),
+    ) as Row,
+  ];
+}
+
+/** Choix du jour à planifier : aujourd'hui et les 24 jours suivants. */
+export function buildPlanDayMenu(board: EssortBoardRow): ActionRowBuilder<StringSelectMenuBuilder> {
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`essort:planday:${board.id}`)
+      .setPlaceholder('Quel jour ?')
+      .addOptions(
+        Array.from({ length: MAX_OPTIONS }, (_, i) => {
+          const date = addDays(board.board_date, i);
+          const label =
+            i === 0
+              ? `Aujourd’hui (${shortDate(date)})`
+              : i === 1
+                ? `Demain (${shortDate(date)})`
+                : dayLabel(date);
+          return new StringSelectMenuOptionBuilder().setValue(date).setLabel(label);
+        }),
+      ),
+  );
+}
+
+/**
+ * Saisie d'une tâche : le texte, et une heure facultative (ping à l'heure).
+ * @param from 'plan' depuis la semaine (réponse dans le menu éphémère),
+ * 'add' depuis le message du jour (le tableau se met à jour, rien d'autre).
+ */
+export function buildTaskModal(boardId: number, date: string, from: 'plan' | 'add'): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`essort:${from}modal:${boardId}:${date}`)
+    .setTitle(from === 'add' ? 'Ajouter pour aujourd’hui' : `Planifier · ${dayLabel(date)}`)
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId('label')
+          .setLabel('Que faut-il faire ?')
+          .setPlaceholder('Ex. : envoyer le devis à Atelier Martin')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(200)
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId('time')
+          .setLabel('À quelle heure ? (facultatif)')
+          .setPlaceholder('Ex. : 14h30 — le bot te pingue à l’heure')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(5)
+          .setRequired(false),
+      ),
+    );
+}
+
+/** Menu des tâches planifiées à retirer (jours à venir). */
+export function buildUnplanMenu(
+  board: EssortBoardRow,
+  planned: TaskWithBoard[],
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const options = planned.slice(0, MAX_OPTIONS);
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`essort:unplanpick:${board.id}`)
+      .setPlaceholder('Tâches planifiées à retirer…')
+      .setMinValues(1)
+      .setMaxValues(options.length)
+      .addOptions(
+        options.map((t) =>
+          new StringSelectMenuOptionBuilder()
+            .setValue(String(t.id))
+            .setLabel(truncate(withTime(t.due_time, t.label), 100))
+            .setDescription(dayLabel(t.essort_boards.board_date)),
         ),
       ),
   );

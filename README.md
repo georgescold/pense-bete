@@ -134,23 +134,32 @@ concernés (ils se redéclenchent d'eux-mêmes).
 
 ## Essort : tâches commerciales du CRM Airtable
 
-Chaque jour à 6h, le bot lit la table « Leads » d'Airtable (**sans jamais y écrire**) et
-poste un tableau dans le salon de chaque personne (champ **Gestion** : Loys ou Enzo). Il relit
-Airtable à 12h et 17h et met le même message à jour, sans nouvelle mention.
+Chaque jour à 6h, le bot lit la table « Leads » d'Airtable (**sans jamais y écrire**) et poste
+deux messages dans le salon de chaque personne (champ **Gestion** : Loys ou Enzo). Il relit
+Airtable à 12h et 17h et met ces messages à jour, sans nouvelle mention.
 
-- **Tâche du jour** : lead dont la *date de la prochaine action* est aujourd'hui ou passée
-  (retard affiché). Sans date, la date est lue dans *Prochain événement* (« jeudi 08/10 »,
-  « fin octobre »…). Le libellé dépend de l'*Action* (a call, R1, R2, à relancer…). Les leads
-  `dead` sont ignorés.
-- **À venir** (3 jours), **sans date de prochaine action**, **sans responsable** : affichés
-  sous la liste, pour préparer et compléter Airtable.
-- **✔️** valide une tâche : elle part aussitôt dans l'onglet « Essort » du Google Sheet
-  (décocher efface la ligne). Une action validée ne revient pas tant que sa date ou son
-  action n'ont pas changé dans Airtable : elle est alors signalée « date à changer ».
+**📅 Ta semaine** — les 6 jours suivants (pas aujourd'hui) : actions Airtable, tâches planifiées,
+rappels, chacun à son heure.
+- **➕ Planifier** : un jour (d'aujourd'hui à J+24), une tâche, une heure facultative.
+- **🗑️ Retirer** : une tâche planifiée sur un jour à venir.
+- **⏰ Rappels** : la liste de ses rappels ; ➕ en créer un (même formulaire que `/rappel ajouter`),
+  ou en choisir un pour le mettre en pause, le réactiver ou le supprimer.
+- **🔄 Actualiser** : relit Airtable tout de suite.
+
+**☀️ Aujourd'hui** — avec mention, seulement ce qu'il y a à faire : la tâche, son heure, la
+consigne (« Prochain événement ») et le téléphone. Les rappels du jour sont listés dessous.
+- **✔️ n** valide une tâche : elle part aussitôt dans l'onglet « Essort » du Google Sheet
+  (décocher efface la ligne).
+- **➕ Ajouter** (heure facultative), **🗑️ Retirer** n'importe quelle tâche. Une tâche Airtable
+  retirée ou validée ne revient pas tant que sa date ou son action ne changent pas dans Airtable.
 - Une tâche non faite **reste affichée** les jours suivants, jusqu'à être faite ou retirée.
-- **➕** ajoute une tâche à la main, **🗑️** retire n'importe quelle tâche du tableau (une tâche
-  Airtable retirée ne revient pas tant que le lead ne change pas), **🔄** relit Airtable.
-- Bot redémarré après 6h : le tableau manquant est publié au démarrage.
+- Une tâche à heure fixe déclenche un ping à l'heure dite : « ⏰ 11:00 · Appeler… ».
+
+Lecture d'Airtable : la date est *date de la prochaine action*, à défaut celle écrite dans
+*Prochain événement* (« jeudi 08/10 », « fin octobre »…) ; l'heure vient de *Prochain événement*
+(« à 11h ») si ce texte parle du même jour. Le libellé dépend de l'*Action* (a call, R1, R2, à
+relancer…), les leads `dead` sont ignorés. Bot redémarré après 6h : ce qui manque est publié au
+démarrage, les pings du jour sont reprogrammés.
 
 ## Tests
 
@@ -168,6 +177,7 @@ src/
 ├── config.ts             # Validation env vars (Zod)
 ├── logger.ts             # Pino
 ├── commands/
+│   ├── reminderPanel.ts  # Panneau « ⏰ Rappels » ouvert depuis un bouton
 │   ├── index.ts
 │   ├── rappel.ts         # /rappel ajouter|liste|supprimer|pause|reprendre
 │   └── types.ts
@@ -178,10 +188,10 @@ src/
 │   └── trigger.ts        # Envoi du rappel + update next_run_at
 ├── essort/
 │   ├── airtable.ts       # Lecture seule du CRM (GET uniquement)
-│   ├── planner.ts        # Leads → tâches du jour, à venir, sans date (fonctions pures)
-│   ├── service.ts        # Tableaux, synchro Airtable, onglet « Essort » du Sheet
-│   ├── ui.ts             # Embed + boutons
-│   ├── interactions.ts   # ✔️ ➕ 🗑️ 🔄
+│   ├── planner.ts        # Leads → tâches du jour et de la semaine, dates et heures (pur)
+│   ├── service.ts        # Messages semaine + jour, synchro Airtable, pings, Sheet
+│   ├── ui.ts             # Embeds, boutons, menus
+│   ├── interactions.ts   # ✔️ ➕ 🗑️ 🔄 et planification
 │   └── jobs.ts           # 6h, relectures 12h/17h, rattrapage au démarrage
 ├── db/
 │   ├── supabase.ts       # Client Supabase

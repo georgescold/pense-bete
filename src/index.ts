@@ -13,6 +13,7 @@ import { handleReminderComponent, isReminderComponent } from './commands/reminde
 import { handleDailyInteraction, isDailyInteraction } from './daily/interactions';
 import { startDailyJobs } from './daily/jobs';
 import { handleEssortInteraction, isEssortInteraction } from './essort/interactions';
+import { handleReminderPanel, isReminderPanelInteraction } from './commands/reminderPanel';
 import { startEssortJobs } from './essort/jobs';
 import { buildHelpEmbed } from './lib/embeds';
 import { Scheduler } from './scheduler/scheduler';
@@ -174,6 +175,28 @@ async function main(): Promise<void> {
         await handleDailyInteraction(interaction);
       } catch (err) {
         logger.error({ err, customId: interaction.customId }, 'daily interaction failed');
+        const msg = err instanceof Error ? err.message : 'Erreur inconnue';
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          } else {
+            await interaction.followUp({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+
+    if (
+      (interaction.isButton() || interaction.isStringSelectMenu()) &&
+      isReminderPanelInteraction(interaction.customId)
+    ) {
+      try {
+        await handleReminderPanel(interaction, scheduler);
+      } catch (err) {
+        logger.error({ err, customId: interaction.customId }, 'reminder panel failed');
         const msg = err instanceof Error ? err.message : 'Erreur inconnue';
         try {
           if (!interaction.replied && !interaction.deferred) {

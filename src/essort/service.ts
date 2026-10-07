@@ -1,8 +1,9 @@
-import { Client, userMention, type SendableChannels } from 'discord.js';
+import { Client, userMention, type BaseMessageOptions, type SendableChannels } from 'discord.js';
 import { config, essortMembers, type EssortMember, type EssortPerson } from '../config';
 import { logger } from '../logger';
 import {
   addTask,
+  deleteTask,
   ensureBoard,
   getBoard,
   getBoardById,
@@ -10,23 +11,33 @@ import {
   listBoardsToArchive,
   listHandledAirtableTasks,
   listOpenTasksBefore,
+  listPlannedTasks,
   listTasks,
   listTasksToSync,
   moveTask,
   updateBoard,
   updateTask,
-  deleteTask,
-  type BoardExtras,
   type EssortBoardRow,
   type EssortTaskRow,
   type TaskWithBoard,
 } from '../db/essortRepository';
+import { listRemindersByUser } from '../db/repository';
 import { formatPlanDate } from '../daily/ui';
-import { parisDateValue } from '../lib/datetime';
+import { parisDateValue, zonedWallClockToUtc } from '../lib/datetime';
+import { expandOccurrences } from '../lib/embeds';
 import { appendRowsTo, clearRange, isSheetsConfigured } from '../lib/sheets';
 import { fetchLeads, recordUrl } from './airtable';
-import { buildAgenda, padDate, type Agenda } from './planner';
-import { boardIntro, buildBoardComponents, buildBoardEmbed } from './ui';
+import { addDays, buildAgenda, padDate, WEEK_DAYS, type Agenda } from './planner';
+import {
+  buildDayComponents,
+  buildDayEmbed,
+  buildWeekComponents,
+  buildWeekEmbed,
+  dayIntro,
+  dayOrder,
+  type TimedLine,
+  type WeekItem,
+} from './ui';
 
 /** Date murale Paris du jour, au format 'YYYY-MM-DD'. */
 export function essortToday(now: Date = new Date()): string {
@@ -71,8 +82,8 @@ function withBoardLock<T>(boardId: number, fn: () => Promise<T>): Promise<T> {
 // Lecture d'Airtable
 // ---------------------------------------------------------------------------
 
-/** Au lever : 3 essais sur ~40 s. Sur un clic : un seul, la personne attend. */
-const MORNING_READ_DELAYS = [0, 10_000, 30_000];
+/** 3 essais sur ~40 s ; sur un clic, un seul : la personne attend. */
+const SCHEDULED_READ_DELAYS = [0, 10_000, 30_000];
 
 async function readAgenda(date: string, delays: number[]): Promise<Agenda | null> {
   for (const [attempt, delay] of delays.entries()) {
@@ -87,7 +98,7 @@ async function readAgenda(date: string, delays: number[]): Promise<Agenda | null
 }
 
 // ---------------------------------------------------------------------------
-// Construction d'un tableau
+// Tâches du jour
 // ---------------------------------------------------------------------------
 
 function nextPosition(tasks: EssortTaskRow[]): number {
@@ -97,9 +108,8 @@ function nextPosition(tasks: EssortTaskRow[]): number {
 /**
  * Aligne les tâches Airtable du tableau sur l'agenda lu :
  *  - une action échue apparaît (une seule fois par lead et par action) ;
- *  - une action déjà validée un autre jour, dont la date n'a pas bougé dans
- *    Airtable, ne revient pas : elle est signalée « date à changer » ;
- *  - une action retirée depuis Discord ne revient pas non plus ;
+ *  - une action déjà validée ou retirée, dont la date n'a pas bougé dans
+ *    Airtable, ne revient pas ;
  *  - une tâche non faite dont le lead n'est plus dû (date repoussée, lead
  *    mort) disparaît ;
  *  - les tâches faites et les tâches manuelles ne sont jamais touchées.
@@ -115,7 +125,6 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
   const tasks = await listTasks(board.id, true);
   const history = await listHandledAirtableTasks(plan.due.map((d) => d.recordId));
   const keep = new Set<number>();
-  const stale: NonNullable<BoardExtras['stale']> = [];
   let position = nextPosition(tasks);
 
   for (const due of plan.due) {
@@ -125,21 +134,15 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
     if (same) {
       keep.add(same.id);
       const open = !same.is_done && !same.dismissed_at;
-      if (open && (same.label !== due.label || same.details !== due.details)) {
-        await updateTask(same.id, { label: due.label, details: due.details });
+      const changed =
+        same.label !== due.label || same.details !== due.details || same.due_time !== due.time;
+      if (open && changed) {
+        await updateTask(same.id, { label: due.label, details: due.details, due_time: due.time });
       }
       continue;
     }
 
-    const handled = history.filter((t) => t.signature === due.signature && t.board_id !== board.id);
-    if (handled.length > 0) {
-      // Faite : on rappelle de changer la date dans Airtable. Retirée : on
-      // respecte le choix, sans rien afficher.
-      const done = handled.find((t) => t.is_done && t.done_at);
-      if (done)
-        stale.push({ label: due.label, doneOn: essortToday(new Date(done.done_at as string)) });
-      continue;
-    }
+    if (history.some((t) => t.signature === due.signature && t.board_id !== board.id)) continue;
 
     // Même lead, autre action ou autre date : on met la tâche à jour sur place
     // plutôt que d'en empiler une seconde.
@@ -150,6 +153,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
         signature: due.signature,
         label: due.label,
         details: due.details,
+        due_time: due.time,
       });
       continue;
     }
@@ -161,6 +165,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
       signature: due.signature,
       label: due.label,
       details: due.details,
+      due_time: due.time,
       position: position++,
     });
     keep.add(added.id);
@@ -172,13 +177,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
   }
 
   await updateBoard(board.id, {
-    extras: {
-      upcoming: plan.upcoming,
-      undated: plan.undated,
-      unassigned: agenda.unassigned,
-      stale,
-      airtableError: false,
-    },
+    extras: { upcoming: plan.upcoming, airtableError: false },
     read_at: new Date().toISOString(),
   });
 }
@@ -196,49 +195,144 @@ export async function moveOpenTasks(board: EssortBoardRow): Promise<void> {
   logger.info({ board: board.id, moved: open.length }, 'taches ouvertes reportees sur le jour');
 }
 
+// ---------------------------------------------------------------------------
+// Rappels (table `reminders`) : affichés dans le jour et la semaine
+// ---------------------------------------------------------------------------
+
+const PARIS_PARTS = new Intl.DateTimeFormat('en-CA', {
+  timeZone: config.TIMEZONE,
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+function parisDateTime(d: Date): { date: string; time: string } {
+  const p: Record<string, string> = {};
+  for (const part of PARIS_PARTS.formatToParts(d)) p[part.type] = part.value;
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
+}
+
+function startOfDay(date: string): Date {
+  const [year, month, day] = date.split('-').map(Number);
+  return zonedWallClockToUtc({ year: year!, month: month!, day: day!, hour: 0, minute: 0 });
+}
+
+/** Occurrences des rappels de la personne entre deux jours inclus. */
+async function reminderLines(
+  userId: string | null,
+  from: string,
+  to: string,
+): Promise<(TimedLine & { date: string })[]> {
+  if (!userId) return [];
+  const rows = (await listRemindersByUser(userId)).filter((r) => r.status !== 'done');
+  const end = new Date(startOfDay(addDays(to, 1)).getTime() - 1);
+  return expandOccurrences(rows, startOfDay(from), end).map((o) => ({
+    ...parisDateTime(o.date),
+    label: o.reminder.message,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Les deux messages : la semaine, puis la journée
+// ---------------------------------------------------------------------------
+
 /** Code d'erreur Discord d'un message qui n'existe plus. */
 const UNKNOWN_MESSAGE = 10008;
 
-/** Publie le tableau s'il n'a pas encore de message, sinon le met à jour. */
-export async function renderBoard(client: Client, boardId: number): Promise<void> {
+type MessagePayload = Pick<BaseMessageOptions, 'content' | 'embeds' | 'components'>;
+
+/**
+ * Met à jour un message, ou le publie s'il n'existe pas (encore ou plus).
+ * Une simple erreur réseau ne doit pas doubler le message : seul un message
+ * supprimé (10008) justifie de republier.
+ */
+async function upsertMessage(
+  channel: SendableChannels,
+  messageId: string | null,
+  payload: MessagePayload,
+  mentionUserIds: string[],
+  allowPost: boolean,
+): Promise<string | null> {
+  if (messageId) {
+    try {
+      const msg = await channel.messages.fetch(messageId);
+      await msg.edit({ ...payload, allowedMentions: { parse: [] } });
+      return messageId;
+    } catch (err) {
+      logger.warn({ err, messageId }, 'message Essort non modifiable');
+      if ((err as { code?: unknown }).code !== UNKNOWN_MESSAGE) return messageId;
+    }
+  }
+  if (!allowPost) return null;
+  const sent = await channel.send({ ...payload, allowedMentions: { users: mentionUserIds } });
+  return sent.id;
+}
+
+async function weekItems(board: EssortBoardRow): Promise<{ items: WeekItem[]; planned: number }> {
+  const from = addDays(board.board_date, 1);
+  const to = addDays(board.board_date, WEEK_DAYS);
+  const items: WeekItem[] = (board.extras?.upcoming ?? []).map((u) => ({ ...u, kind: 'airtable' }));
+
+  // Toutes les tâches planifiées à venir : le menu « Retirer » va au-delà de la semaine.
+  const planned = await listPlannedTasks(board.person, from, '9999-12-31');
+  for (const t of planned) {
+    const date = t.essort_boards.board_date;
+    if (date <= to) items.push({ date, time: t.due_time, label: t.label, kind: 'planned' });
+  }
+  for (const r of await reminderLines(memberOf(board.person)?.userId ?? null, from, to)) {
+    items.push({ date: r.date, time: r.time, label: r.label, kind: 'reminder' });
+  }
+  return { items, planned: planned.length };
+}
+
+/** Publie ou met à jour les messages du tableau (semaine d'abord, puis jour). */
+export async function renderBoard(
+  client: Client,
+  boardId: number,
+  parts: { week?: boolean; day?: boolean } = {},
+): Promise<void> {
   const board = await getBoardById(boardId);
   if (!board) return;
   const channel = await fetchChannel(client, board.channel_id);
   if (!channel) return;
-
-  const tasks = await listTasks(board.id);
-  const remaining = tasks.filter((t) => !t.is_done).length;
+  const live = !board.archived_at;
   const userId = memberOf(board.person)?.userId ?? null;
-  const payload = {
-    content: board.archived_at
-      ? ''
-      : boardIntro(userId ? userMention(userId) : null, remaining, tasks.length),
-    embeds: [buildBoardEmbed(board, tasks)],
-    components: buildBoardComponents(board, tasks),
-  };
 
-  if (board.message_id) {
-    try {
-      const msg = await channel.messages.fetch(board.message_id);
-      await msg.edit({ ...payload, allowedMentions: { parse: [] } });
-      return;
-    } catch (err) {
-      logger.warn({ err, id: board.id }, 'message Essort non modifiable');
-      // Seul un message supprimé à la main (10008) justifie de republier, et
-      // seulement celui du jour : une simple erreur réseau ne doit pas doubler
-      // le tableau.
-      if (board.archived_at || (err as { code?: unknown }).code !== UNKNOWN_MESSAGE) return;
-    }
+  if (parts.week !== false) {
+    const { items, planned } = await weekItems(board);
+    const id = await upsertMessage(
+      channel,
+      board.week_message_id,
+      { embeds: [buildWeekEmbed(board, items)], components: buildWeekComponents(board, planned) },
+      [],
+      live,
+    );
+    if (id !== board.week_message_id) await updateBoard(board.id, { week_message_id: id });
   }
 
-  const sent = await channel.send({
-    ...payload,
-    allowedMentions: { users: userId && remaining > 0 ? [userId] : [] },
-  });
-  await updateBoard(board.id, { message_id: sent.id });
+  if (parts.day !== false) {
+    const tasks = dayOrder(await listTasks(board.id));
+    const remaining = tasks.filter((t) => !t.is_done).length;
+    const reminders = await reminderLines(userId, board.board_date, board.board_date);
+    const id = await upsertMessage(
+      channel,
+      board.message_id,
+      {
+        content: live ? dayIntro(userId ? userMention(userId) : null, remaining, tasks.length) : '',
+        embeds: [buildDayEmbed(board, tasks, reminders)],
+        components: buildDayComponents(board, tasks),
+      },
+      userId ? [userId] : [],
+      live,
+    );
+    if (id !== board.message_id) await updateBoard(board.id, { message_id: id });
+  }
 }
 
-/** Retire les boutons des tableaux des jours passés. */
+/** Fige les tableaux des jours passés : plus de boutons. */
 async function archivePastBoards(
   client: Client,
   person: EssortPerson,
@@ -246,8 +340,23 @@ async function archivePastBoards(
 ): Promise<void> {
   for (const old of await listBoardsToArchive(person, date)) {
     await updateBoard(old.id, { archived_at: new Date().toISOString() });
-    if (old.message_id) await renderBoard(client, old.id);
+    if (old.message_id || old.week_message_id) await renderBoard(client, old.id);
   }
+}
+
+/**
+ * Un message du jour posté sans message de semaine (version précédente du
+ * bot) : on le remplace pour que la semaine passe au-dessus, dans l'ordre.
+ */
+async function replaceLoneDayMessage(client: Client, board: EssortBoardRow): Promise<void> {
+  if (board.week_message_id || !board.message_id || board.archived_at) return;
+  const channel = await fetchChannel(client, board.channel_id);
+  if (channel) {
+    await channel.messages
+      .delete(board.message_id)
+      .catch((err) => logger.warn({ err, id: board.id }, 'ancien message du jour non supprime'));
+  }
+  await updateBoard(board.id, { message_id: null });
 }
 
 async function publishBoard(
@@ -263,30 +372,31 @@ async function publishBoard(
     await moveOpenTasks(board);
     await archivePastBoards(client, member.person, date);
     await reconcile(board, agenda);
+    await replaceLoneDayMessage(client, board);
     await renderBoard(client, board.id);
+    await schedulePings(client, board.id);
   });
   logger.info({ person: member.person, date, board: board.id }, 'tableau Essort publie');
 }
 
 /**
- * Rendez-vous de 6h (et relectures de la journée) : un tableau par personne
- * configurée. Publier un tableau déjà posté le met simplement à jour, sans
- * nouvelle mention.
+ * Rendez-vous de 6h et relectures de la journée : un tableau par personne.
+ * Publier un tableau déjà posté le met simplement à jour, sans nouvelle
+ * mention.
  *
- * @param onlyMissing ne traiter que les personnes dont le tableau du jour n'a
- * pas encore de message (rattrapage au démarrage, sans relire Airtable pour
- * rien à chaque redémarrage).
+ * @param onlyMissing ne traiter que les personnes dont les messages du jour
+ * manquent (rattrapage au démarrage, sans relire Airtable pour rien).
  */
 export async function publishBoards(client: Client, onlyMissing = false): Promise<void> {
   const date = essortToday();
   const members: EssortMember[] = [];
   for (const m of essortMembers) {
     const existing = onlyMissing ? await getBoard(m.person, date) : null;
-    if (!existing?.message_id) members.push(m);
+    if (!existing?.message_id || !existing.week_message_id) members.push(m);
   }
   if (members.length === 0) return;
 
-  const agenda = await readAgenda(date, MORNING_READ_DELAYS);
+  const agenda = await readAgenda(date, SCHEDULED_READ_DELAYS);
   const failures: unknown[] = [];
   for (const m of members) {
     try {
@@ -301,6 +411,15 @@ export async function publishBoards(client: Client, onlyMissing = false): Promis
   if (failures.length > 0) throw failures[0];
 }
 
+/** Un rappel créé, modifié ou supprimé : le jour et la semaine de la personne suivent. */
+export async function refreshForUser(client: Client, userId: string): Promise<void> {
+  const member = essortMembers.find((m) => m.userId === userId);
+  if (!member) return;
+  const board = await getBoard(member.person, essortToday());
+  if (!board?.message_id) return;
+  await withBoardLock(board.id, () => renderBoard(client, board.id));
+}
+
 // ---------------------------------------------------------------------------
 // Actions depuis Discord
 // ---------------------------------------------------------------------------
@@ -310,25 +429,61 @@ export function refreshBoard(client: Client, board: EssortBoardRow): Promise<voi
     const fresh = (await getBoardById(board.id)) ?? board;
     await reconcile(fresh, await readAgenda(fresh.board_date, [0]));
     await renderBoard(client, board.id);
-  });
-}
-
-export function addManualTask(client: Client, board: EssortBoardRow, label: string): Promise<void> {
-  return withBoardLock(board.id, async () => {
-    const tasks = await listTasks(board.id);
-    await addTask({ board_id: board.id, source: 'manual', label, position: nextPosition(tasks) });
-    await renderBoard(client, board.id);
+    await schedulePings(client, board.id);
   });
 }
 
 /**
- * Retire des tâches du tableau et renvoie leurs libellés.
- *
- * Une tâche ajoutée à la main est supprimée. Une tâche Airtable est seulement
- * masquée : elle ne revient pas aux relectures suivantes tant que l'action ou
- * la date du lead ne changent pas. Si la tâche était déjà dans le Sheet, sa
- * ligne est effacée.
+ * Ajoute une tâche à un jour (aujourd'hui ou plus tard) pour la personne du
+ * tableau. Un jour à venir a son propre tableau, publié le matin venu.
  */
+export async function planTask(
+  client: Client,
+  todayBoard: EssortBoardRow,
+  date: string,
+  label: string,
+  time: string | null,
+): Promise<void> {
+  const isToday = date === todayBoard.board_date;
+  const target = isToday
+    ? todayBoard
+    : (await ensureBoard(todayBoard.person, date, todayBoard.channel_id)).board;
+  await withBoardLock(target.id, async () => {
+    const tasks = await listTasks(target.id, true);
+    await addTask({
+      board_id: target.id,
+      source: 'manual',
+      label,
+      due_time: time,
+      position: nextPosition(tasks),
+    });
+  });
+  await withBoardLock(todayBoard.id, async () => {
+    await renderBoard(client, todayBoard.id, { week: !isToday, day: isToday });
+    if (isToday) await schedulePings(client, todayBoard.id);
+  });
+  logger.info({ person: todayBoard.person, date, time, label }, 'tache Essort planifiee');
+}
+
+/**
+ * Retire une tâche. Une tâche ajoutée à la main est supprimée ; une tâche
+ * Airtable est seulement masquée, pour ne pas revenir aux relectures tant que
+ * l'action ou la date du lead ne changent pas. Une ligne déjà écrite dans le
+ * Sheet est effacée.
+ */
+async function dismissTask(task: EssortTaskRow): Promise<void> {
+  // Décochée avant tout : plus aucune synchro ne la recopiera dans le Sheet.
+  await updateTask(task.id, {
+    is_done: false,
+    done_at: null,
+    done_by: null,
+    dismissed_at: new Date().toISOString(),
+  });
+  await removeFromSheet(task.id);
+  if (task.source === 'manual') await deleteTask(task.id);
+}
+
+/** Retire des tâches du jour et renvoie leurs libellés. */
 export function removeTasks(
   client: Client,
   board: EssortBoardRow,
@@ -339,18 +494,32 @@ export function removeTasks(
     for (const id of taskIds) {
       const task = await getTask(id);
       if (!task || task.board_id !== board.id || task.dismissed_at) continue;
-      // Décochée avant tout : plus aucune synchro ne la recopiera dans le Sheet.
-      await updateTask(task.id, {
-        is_done: false,
-        done_at: null,
-        done_by: null,
-        dismissed_at: new Date().toISOString(),
-      });
-      await removeFromSheet(task.id);
-      if (task.source === 'manual') await deleteTask(task.id);
+      await dismissTask(task);
       removed.push(task.label);
     }
-    if (removed.length > 0) await renderBoard(client, board.id);
+    if (removed.length > 0) await renderBoard(client, board.id, { week: false });
+    return removed;
+  });
+}
+
+/** Retire des tâches planifiées sur des jours à venir et renvoie leurs libellés. */
+export function unplanTasks(
+  client: Client,
+  todayBoard: EssortBoardRow,
+  taskIds: number[],
+): Promise<string[]> {
+  return withBoardLock(todayBoard.id, async () => {
+    const removed: string[] = [];
+    for (const id of taskIds) {
+      const task = await getTask(id);
+      if (!task || task.dismissed_at || task.source !== 'manual') continue;
+      const board = await getBoardById(task.board_id);
+      if (!board || board.person !== todayBoard.person) continue;
+      if (board.board_date <= todayBoard.board_date) continue;
+      await dismissTask(task);
+      removed.push(task.label);
+    }
+    if (removed.length > 0) await renderBoard(client, todayBoard.id, { day: false });
     return removed;
   });
 }
@@ -373,9 +542,79 @@ export function toggleTasks(
       });
       if (!done) void removeFromSheet(task.id);
     }
-    await renderBoard(client, board.id);
+    await renderBoard(client, board.id, { week: false });
     void syncDoneTasks();
   });
+}
+
+// ---------------------------------------------------------------------------
+// Pings à l'heure : « ⏰ 11:00 · Appeler… »
+// ---------------------------------------------------------------------------
+
+/** Un ping manqué de peu (redémarrage) part quand même ; au-delà, on s'abstient. */
+const LATE_PING_MS = 5 * 60_000;
+const pingTimers = new Map<number, NodeJS.Timeout>();
+
+/** Programme le ping de chaque tâche à heure fixe du tableau du jour. */
+export async function schedulePings(client: Client, boardId: number): Promise<void> {
+  const board = await getBoardById(boardId);
+  if (!board || board.archived_at || board.board_date !== essortToday()) return;
+  const [year, month, day] = board.board_date.split('-').map(Number);
+
+  for (const t of await listTasks(board.id)) {
+    if (!t.due_time || t.is_done || t.pinged_at) continue;
+    const [hour, minute] = t.due_time.split(':').map(Number);
+    const at = zonedWallClockToUtc({
+      year: year!,
+      month: month!,
+      day: day!,
+      hour: hour!,
+      minute: minute!,
+    });
+    const delay = at.getTime() - Date.now();
+    if (delay < -LATE_PING_MS) continue;
+
+    const previous = pingTimers.get(t.id);
+    if (previous) clearTimeout(previous);
+    pingTimers.set(
+      t.id,
+      setTimeout(
+        () => {
+          void firePing(client, t.id).catch((err) =>
+            logger.error({ err, taskId: t.id }, 'ping Essort non envoye'),
+          );
+        },
+        Math.max(0, delay),
+      ),
+    );
+  }
+}
+
+async function firePing(client: Client, taskId: number): Promise<void> {
+  pingTimers.delete(taskId);
+  // On relit tout : la tâche a pu être faite, retirée ou déplacée entre-temps.
+  const task = await getTask(taskId);
+  if (!task?.due_time || task.is_done || task.dismissed_at || task.pinged_at) return;
+  const board = await getBoardById(task.board_id);
+  if (!board || board.archived_at || board.board_date !== essortToday()) return;
+  const channel = await fetchChannel(client, board.channel_id);
+  if (!channel) return;
+
+  const userId = memberOf(board.person)?.userId ?? null;
+  await channel.send({
+    content: `⏰ ${userId ? `${userMention(userId)} ` : ''}**${task.due_time}** · ${task.label}`,
+    allowedMentions: { users: userId ? [userId] : [] },
+  });
+  await updateTask(task.id, { pinged_at: new Date().toISOString() });
+}
+
+/** Au démarrage : reprogrammer les pings du jour (les minuteurs ne survivent pas). */
+export async function restoreTodayPings(client: Client): Promise<void> {
+  const date = essortToday();
+  for (const m of essortMembers) {
+    const board = await getBoard(m.person, date);
+    if (board) await schedulePings(client, board.id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +651,7 @@ function taskToRow(task: TaskWithBoard): string[] {
     date,
     formatPlanDate(date).split(' ')[0] ?? '',
     task.essort_boards.person,
-    task.label,
+    task.due_time ? `${task.due_time} · ${task.label}` : task.label,
     task.source === 'airtable' ? 'Airtable' : 'Ajoutée',
     task.done_at
       ? new Date(task.done_at).toLocaleTimeString('fr-FR', {
