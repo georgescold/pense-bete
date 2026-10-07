@@ -27,6 +27,22 @@ const schema = z.object({
   // Une clé API ne peut PAS écrire dans un Sheet : il faut un compte de service.
   GOOGLE_SHEET_ID: z.string().optional(),
   GOOGLE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+
+  // --- Essort : tâches commerciales lues dans le CRM Airtable ---
+  // Le bot ne fait que LIRE Airtable : token avec le seul scope data.records:read.
+  AIRTABLE_TOKEN: z.string().optional(),
+  AIRTABLE_BASE_ID: z.string().default('appWdzyvFb3DaqPXk'),
+  AIRTABLE_LEADS_TABLE: z.string().default('tblcpyeIaC9qJPOnJ'),
+  ESSORT_CRON: z.string().default('0 6 * * *'),
+  // Relectures d'Airtable dans la journée : le tableau du matin est mis à jour
+  // sur place, sans nouveau message ni mention.
+  ESSORT_REFRESH_CRON: z.string().default('0 12,17 * * *'),
+  // Une personne n'a de tableau que si son salon est défini. L'identifiant
+  // Discord sert à la mentionner et à limiter qui peut cocher.
+  ESSORT_LOYS_CHANNEL_ID: z.string().optional(),
+  ESSORT_LOYS_USER_ID: z.string().optional(),
+  ESSORT_ENZO_CHANNEL_ID: z.string().optional(),
+  ESSORT_ENZO_USER_ID: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof schema>;
@@ -46,6 +62,31 @@ export const dailyConfigured = Boolean(config.DAILY_CHANNEL_ID && config.DAILY_U
 /** Les journées de travail ne tournent que si elles sont configurées et pas en veille. */
 export const dailyEnabled = dailyConfigured && !config.DAILY_PAUSED;
 
+/** Valeurs possibles du champ « Gestion » d'Airtable : une personne = un tableau. */
+export type EssortPerson = 'Loys' | 'Enzo';
+
+export interface EssortMember {
+  person: EssortPerson;
+  channelId: string;
+  userId: string | null;
+}
+
+export const essortMembers: EssortMember[] = (
+  [
+    ['Loys', config.ESSORT_LOYS_CHANNEL_ID, config.ESSORT_LOYS_USER_ID],
+    ['Enzo', config.ESSORT_ENZO_CHANNEL_ID, config.ESSORT_ENZO_USER_ID],
+  ] as const
+)
+  .filter(([, channelId]) => Boolean(channelId))
+  .map(([person, channelId, userId]) => ({
+    person,
+    channelId: channelId as string,
+    userId: userId ?? null,
+  }));
+
+/** Tableaux Essort : un token Airtable et au moins un salon. */
+export const essortEnabled = Boolean(config.AIRTABLE_TOKEN) && essortMembers.length > 0;
+
 // Diagnostic log on boot: confirm injected values are well-formed (no secret leak).
 const sk = config.SUPABASE_SERVICE_ROLE_KEY;
 const dots = (sk.match(/\./g) || []).length;
@@ -61,5 +102,11 @@ console.log(
     dailyEnabled ? 'activées' : config.DAILY_PAUSED ? 'en veille' : 'désactivées'
   } sheets=${
     config.GOOGLE_SERVICE_ACCOUNT_JSON ? 'compte de service' : 'non configuré'
+  } essort=${
+    essortEnabled
+      ? essortMembers.map((m) => m.person).join('+')
+      : config.AIRTABLE_TOKEN
+        ? 'aucun salon'
+        : 'pas de token Airtable'
   }`,
 );

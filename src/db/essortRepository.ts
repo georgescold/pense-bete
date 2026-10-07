@@ -1,0 +1,245 @@
+import type { EssortPerson } from '../config';
+import { supabase } from './supabase';
+
+export interface BoardExtras {
+  upcoming?: { date: string; label: string }[];
+  undated?: string[];
+  unassigned?: string[];
+  /** Actions validées dont la date n'a pas bougé dans Airtable. */
+  stale?: { label: string; doneOn: string }[];
+  /** Dernière lecture d'Airtable en échec : la liste est incomplète. */
+  airtableError?: boolean;
+}
+
+export interface EssortBoardRow {
+  id: number;
+  person: EssortPerson;
+  board_date: string; // 'YYYY-MM-DD', date murale Europe/Paris
+  channel_id: string;
+  message_id: string | null;
+  extras: BoardExtras;
+  read_at: string | null;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export type TaskSource = 'airtable' | 'manual';
+
+export interface EssortTaskRow {
+  id: number;
+  board_id: number;
+  source: TaskSource;
+  record_id: string | null;
+  signature: string | null;
+  label: string;
+  details: string | null;
+  position: number;
+  is_done: boolean;
+  done_at: string | null;
+  done_by: string | null;
+  /** Retirée depuis Discord : invisible, mais gardée pour ne pas revenir. */
+  dismissed_at: string | null;
+  sheet_range: string | null;
+  created_at: string;
+}
+
+export type BoardPatch = Partial<
+  Pick<EssortBoardRow, 'message_id' | 'extras' | 'read_at' | 'archived_at'>
+>;
+export type TaskPatch = Partial<
+  Pick<
+    EssortTaskRow,
+    | 'label'
+    | 'details'
+    | 'signature'
+    | 'position'
+    | 'is_done'
+    | 'done_at'
+    | 'done_by'
+    | 'dismissed_at'
+    | 'sheet_range'
+  >
+>;
+
+const BOARDS = 'essort_boards';
+const TASKS = 'essort_tasks';
+
+export async function getBoard(person: EssortPerson, date: string): Promise<EssortBoardRow | null> {
+  const { data, error } = await supabase
+    .from(BOARDS)
+    .select()
+    .eq('person', person)
+    .eq('board_date', date)
+    .maybeSingle();
+  if (error) throw new Error(`getBoard: ${error.message}`);
+  return (data as EssortBoardRow) ?? null;
+}
+
+export async function getBoardById(id: number): Promise<EssortBoardRow | null> {
+  const { data, error } = await supabase.from(BOARDS).select().eq('id', id).maybeSingle();
+  if (error) throw new Error(`getBoardById: ${error.message}`);
+  return (data as EssortBoardRow) ?? null;
+}
+
+/** Tableaux de jours passés dont le message a encore ses boutons. */
+export async function listBoardsToArchive(
+  person: EssortPerson,
+  before: string,
+): Promise<EssortBoardRow[]> {
+  const { data, error } = await supabase
+    .from(BOARDS)
+    .select()
+    .eq('person', person)
+    .lt('board_date', before)
+    .is('archived_at', null);
+  if (error) throw new Error(`listBoardsToArchive: ${error.message}`);
+  return (data ?? []) as EssortBoardRow[];
+}
+
+/**
+ * Crée le tableau du jour s'il n'existe pas. `created` indique si on vient de
+ * le créer : c'est le seul moment où l'on reprend les tâches de la veille.
+ */
+export async function ensureBoard(
+  person: EssortPerson,
+  date: string,
+  channelId: string,
+): Promise<{ board: EssortBoardRow; created: boolean }> {
+  const existing = await getBoard(person, date);
+  if (existing) return { board: existing, created: false };
+  const { data, error } = await supabase
+    .from(BOARDS)
+    .insert({ person, board_date: date, channel_id: channelId })
+    .select()
+    .single();
+  if (error) {
+    // Course entre le job de 6h et le rattrapage au démarrage : on relit.
+    const retry = await getBoard(person, date);
+    if (retry) return { board: retry, created: false };
+    throw new Error(`ensureBoard: ${error.message}`);
+  }
+  return { board: data as EssortBoardRow, created: true };
+}
+
+export async function updateBoard(id: number, patch: BoardPatch): Promise<EssortBoardRow | null> {
+  const { data, error } = await supabase
+    .from(BOARDS)
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`updateBoard: ${error.message}`);
+  return (data as EssortBoardRow) ?? null;
+}
+
+/**
+ * Tâches d'un tableau, dans l'ordre d'affichage. Les tâches retirées n'en font
+ * partie que sur demande (pour savoir qu'une action a déjà été écartée).
+ */
+export async function listTasks(
+  boardId: number,
+  includeDismissed = false,
+): Promise<EssortTaskRow[]> {
+  let query = supabase.from(TASKS).select().eq('board_id', boardId);
+  if (!includeDismissed) query = query.is('dismissed_at', null);
+  const { data, error } = await query
+    .order('position', { ascending: true })
+    .order('id', { ascending: true });
+  if (error) throw new Error(`listTasks: ${error.message}`);
+  return (data ?? []) as EssortTaskRow[];
+}
+
+export async function getTask(id: number): Promise<EssortTaskRow | null> {
+  const { data, error } = await supabase.from(TASKS).select().eq('id', id).maybeSingle();
+  if (error) throw new Error(`getTask: ${error.message}`);
+  return (data as EssortTaskRow) ?? null;
+}
+
+export async function listTasksByIds(ids: number[]): Promise<EssortTaskRow[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase.from(TASKS).select().in('id', ids);
+  if (error) throw new Error(`listTasksByIds: ${error.message}`);
+  return (data ?? []) as EssortTaskRow[];
+}
+
+export async function addTask(
+  task: Pick<EssortTaskRow, 'board_id' | 'source' | 'label'> &
+    Partial<Pick<EssortTaskRow, 'record_id' | 'signature' | 'details' | 'position'>>,
+): Promise<EssortTaskRow> {
+  const { data, error } = await supabase.from(TASKS).insert(task).select().single();
+  if (error) throw new Error(`addTask: ${error.message}`);
+  return data as EssortTaskRow;
+}
+
+export async function updateTask(id: number, patch: TaskPatch): Promise<EssortTaskRow | null> {
+  const { data, error } = await supabase
+    .from(TASKS)
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`updateTask: ${error.message}`);
+  return (data as EssortTaskRow) ?? null;
+}
+
+export async function deleteTask(id: number): Promise<void> {
+  const { error } = await supabase.from(TASKS).delete().eq('id', id);
+  if (error) throw new Error(`deleteTask: ${error.message}`);
+}
+
+/** Actions Airtable déjà validées ou retirées pour ces leads, tous jours confondus. */
+export async function listHandledAirtableTasks(recordIds: string[]): Promise<EssortTaskRow[]> {
+  if (recordIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from(TASKS)
+    .select()
+    .eq('source', 'airtable')
+    .or('is_done.eq.true,dismissed_at.not.is.null')
+    .in('record_id', recordIds);
+  if (error) throw new Error(`listHandledAirtableTasks: ${error.message}`);
+  return (data ?? []) as EssortTaskRow[];
+}
+
+export type TaskWithBoard = EssortTaskRow & {
+  essort_boards: Pick<EssortBoardRow, 'person' | 'board_date'>;
+};
+
+/** Tâches restées ouvertes sur les tableaux des jours précédents. */
+export async function listOpenTasksBefore(
+  person: EssortPerson,
+  date: string,
+): Promise<TaskWithBoard[]> {
+  const { data, error } = await supabase
+    .from(TASKS)
+    .select('*, essort_boards!inner(person, board_date)')
+    .eq('is_done', false)
+    .is('dismissed_at', null)
+    .eq('essort_boards.person', person)
+    .lt('essort_boards.board_date', date);
+  if (error) throw new Error(`listOpenTasksBefore: ${error.message}`);
+  return ((data ?? []) as TaskWithBoard[]).sort(
+    (a, b) =>
+      a.essort_boards.board_date.localeCompare(b.essort_boards.board_date) ||
+      a.position - b.position ||
+      a.id - b.id,
+  );
+}
+
+/** Rattache des tâches à un autre tableau (même ligne, nouvelle place). */
+export async function moveTask(id: number, boardId: number, position: number): Promise<void> {
+  const { error } = await supabase.from(TASKS).update({ board_id: boardId, position }).eq('id', id);
+  if (error) throw new Error(`moveTask: ${error.message}`);
+}
+
+/** Tâches faites pas encore recopiées dans le Google Sheet. */
+export async function listTasksToSync(): Promise<TaskWithBoard[]> {
+  const { data, error } = await supabase
+    .from(TASKS)
+    .select('*, essort_boards!inner(person, board_date)')
+    .eq('is_done', true)
+    .is('dismissed_at', null)
+    .is('sheet_range', null)
+    .order('done_at', { ascending: true });
+  if (error) throw new Error(`listTasksToSync: ${error.message}`);
+  return (data ?? []) as TaskWithBoard[];
+}

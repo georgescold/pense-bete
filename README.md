@@ -61,6 +61,12 @@ npm run dev               # tsx watch
 | `SUPABASE_SERVICE_ROLE_KEY` | service_role key (bypass RLS) |
 | `TIMEZONE` | par défaut `Europe/Paris` |
 | `LOG_LEVEL` | par défaut `info` |
+| `AIRTABLE_TOKEN` | (Essort) token Airtable en **lecture seule** (`data.records:read`) |
+| `AIRTABLE_BASE_ID` / `AIRTABLE_LEADS_TABLE` | (Essort) par défaut la base et la table « Leads » d'Essort |
+| `ESSORT_CRON` | (Essort) par défaut `0 6 * * *` (6h, heure de Paris) |
+| `ESSORT_REFRESH_CRON` | (Essort) relectures d'Airtable, par défaut `0 12,17 * * *` (12h et 17h) |
+| `ESSORT_LOYS_CHANNEL_ID` / `ESSORT_ENZO_CHANNEL_ID` | (Essort) salon de chaque tableau ; sans salon, pas de tableau |
+| `ESSORT_LOYS_USER_ID` / `ESSORT_ENZO_USER_ID` | (Essort) pour mentionner la personne et réserver les boutons à l'équipe |
 
 ## Commandes
 
@@ -126,6 +132,26 @@ concernés (ils se redéclenchent d'eux-mêmes).
 - `le dernier jour du mois à 18h`
 - `toutes les 30 minutes`, `toutes les 2 heures`
 
+## Essort : tâches commerciales du CRM Airtable
+
+Chaque jour à 6h, le bot lit la table « Leads » d'Airtable (**sans jamais y écrire**) et
+poste un tableau dans le salon de chaque personne (champ **Gestion** : Loys ou Enzo). Il relit
+Airtable à 12h et 17h et met le même message à jour, sans nouvelle mention.
+
+- **Tâche du jour** : lead dont la *date de la prochaine action* est aujourd'hui ou passée
+  (retard affiché). Sans date, la date est lue dans *Prochain événement* (« jeudi 08/10 »,
+  « fin octobre »…). Le libellé dépend de l'*Action* (a call, R1, R2, à relancer…). Les leads
+  `dead` sont ignorés.
+- **À venir** (3 jours), **sans date de prochaine action**, **sans responsable** : affichés
+  sous la liste, pour préparer et compléter Airtable.
+- **✔️** valide une tâche : elle part aussitôt dans l'onglet « Essort » du Google Sheet
+  (décocher efface la ligne). Une action validée ne revient pas tant que sa date ou son
+  action n'ont pas changé dans Airtable : elle est alors signalée « date à changer ».
+- Une tâche non faite **reste affichée** les jours suivants, jusqu'à être faite ou retirée.
+- **➕** ajoute une tâche à la main, **🗑️** retire n'importe quelle tâche du tableau (une tâche
+  Airtable retirée ne revient pas tant que le lead ne change pas), **🔄** relit Airtable.
+- Bot redémarré après 6h : le tableau manquant est publié au démarrage.
+
 ## Tests
 
 ```bash
@@ -150,9 +176,17 @@ src/
 │   ├── parser.test.ts
 │   ├── scheduler.ts      # Map<id, job> + node-cron + long-timeout
 │   └── trigger.ts        # Envoi du rappel + update next_run_at
+├── essort/
+│   ├── airtable.ts       # Lecture seule du CRM (GET uniquement)
+│   ├── planner.ts        # Leads → tâches du jour, à venir, sans date (fonctions pures)
+│   ├── service.ts        # Tableaux, synchro Airtable, onglet « Essort » du Sheet
+│   ├── ui.ts             # Embed + boutons
+│   ├── interactions.ts   # ✔️ ➕ 🗑️ 🔄
+│   └── jobs.ts           # 6h, relectures 12h/17h, rattrapage au démarrage
 ├── db/
 │   ├── supabase.ts       # Client Supabase
-│   └── repository.ts     # CRUD typé
+│   ├── repository.ts     # CRUD typé
+│   └── essortRepository.ts
 ├── lib/
 │   ├── embeds.ts         # Builders Discord embeds
 │   └── format.ts         # Format date FR
