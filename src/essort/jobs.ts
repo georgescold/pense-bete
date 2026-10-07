@@ -54,9 +54,11 @@ export function startEssortJobs(client: Client): void {
   );
 
   // `node-cron` ne rejoue pas une occurrence manquée : un redémarrage à 6h00
-  // ferait sauter la journée. On publie au démarrage ce qui manque.
+  // ferait sauter la journée. Au démarrage, on publie ce qui manque et on met
+  // à jour le reste (sans nouvelle mention) : après un déploiement, les
+  // messages du jour suivent aussitôt.
   if (hasFiredToday(config.ESSORT_CRON)) {
-    void withRetries('rattrapage Essort', () => publishBoards(client, true));
+    void withRetries('rattrapage Essort', () => publishBoards(client));
   }
   // Les minuteurs des pings ne survivent pas à un redémarrage.
   void withRetries('pings du jour', () => restoreTodayPings(client));

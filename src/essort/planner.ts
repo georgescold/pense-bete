@@ -212,27 +212,28 @@ export function leadName(lead: Lead): string {
   return nom ?? cabinet ?? lead.email ?? 'Lead sans nom';
 }
 
+/** Libellé en texte seul : les emojis se rendent mal et alourdissent la liste. */
 export function taskLabel(lead: Lead): string {
   const who = leadName(lead);
   switch (actionKind(lead.action)) {
     case 'call':
-      return `📞 Appeler ${who}`;
+      return `Appeler ${who}`;
     case 'r1':
-      return `🤝 R1 avec ${who}`;
+      return `R1 avec ${who}`;
     case 'r2':
-      return `🤝 R2 avec ${who}`;
+      return `R2 avec ${who}`;
     case 'relance':
-      return `🔁 Relancer ${who}`;
+      return `Relancer ${who}`;
     case 'doc':
-      return `📄 Documents · ${who}`;
+      return `Documents : ${who}`;
     case 'en_cours':
-      return `▶️ Suivi · ${who}`;
+      return `Suivi : ${who}`;
     case 'retour':
-      return `💬 Retour client · ${who}`;
+      return `Retour client : ${who}`;
     case 'other':
-      return `📌 ${lead.action} · ${who}`;
+      return `${lead.action} : ${who}`;
     default:
-      return `📌 Prochaine action · ${who}`;
+      return `Prochaine action : ${who}`;
   }
 }
 

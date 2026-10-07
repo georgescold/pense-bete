@@ -70,12 +70,20 @@ export function dayOrder(tasks: EssortTaskRow[]): EssortTaskRow[] {
   );
 }
 
+/** Heure en `code` devant le texte : même repère visuel dans le jour et la semaine. */
+function timed(time: string | null, text: string): string {
+  return time ? `\`${time}\` ${text}` : text;
+}
+
+/**
+ * Une tâche = un élément de liste numérotée (le numéro est celui du bouton),
+ * sa consigne en sous-puce : une ligne trop longue revient à la ligne sous son
+ * propre texte au lieu de se mêler à la tâche suivante.
+ */
 function taskLine(t: EssortTaskRow, position: number, withDetails: boolean): string {
-  const num = `\`${String(position).padStart(2, ' ')}\``;
-  const text = withTime(t.due_time, t.label);
-  if (t.is_done) return `${num}  ~~${text}~~`;
-  const sub = withDetails && t.details ? `\n      ↳ ${t.details}` : '';
-  return `${num}  **${text}**${sub}`;
+  if (t.is_done) return `${position}. ~~${t.due_time ? `${t.due_time} ` : ''}${t.label}~~`;
+  const sub = withDetails && t.details ? `\n   - ${t.details}` : '';
+  return `${position}. ${timed(t.due_time, `**${t.label}**`)}${sub}`;
 }
 
 /** Les détails s'effacent sur les dernières tâches si la liste déborde. */
@@ -133,7 +141,7 @@ export function buildDayEmbed(
   if (reminders.length > 0) {
     embed.addFields({
       name: '⏰ Rappels',
-      value: truncate(reminders.map((r) => withTime(r.time, r.label)).join('\n'), FIELD_BUDGET),
+      value: truncate(reminders.map((r) => `- ${timed(r.time, r.label)}`).join('\n'), FIELD_BUDGET),
     });
   }
   if (board.extras?.airtableError && !archived) {
@@ -249,8 +257,7 @@ export interface WeekItem {
 }
 
 function weekItemText(item: WeekItem): string {
-  const label = item.kind === 'reminder' ? `⏰ ${item.label}` : item.label;
-  return item.time ? `\`${item.time}\` ${label}` : label;
+  return `- ${timed(item.time, item.kind === 'reminder' ? `${item.label} (rappel)` : item.label)}`;
 }
 
 /** Les 6 jours qui suivent le tableau, un bloc par jour, même vide. */

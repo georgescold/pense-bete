@@ -34,7 +34,7 @@ function task(id: number, partial: Partial<EssortTaskRow> = {}): EssortTaskRow {
     source: 'airtable',
     record_id: 'recABCDEFGHIJKLMN',
     signature: 'a call|2026-10-08',
-    label: `📞 Appeler Prénom Nom ${id} · Cabinet d’architecture au nom assez long`,
+    label: `Appeler Prénom Nom ${id} · Cabinet d’architecture au nom assez long`,
     details: `${'Rappel prévu en fin de matinée, préparer le devis et les références '.repeat(2)} · ☎ 06 00 00 00 00`,
     due_time: null,
     pinged_at: null,
@@ -80,8 +80,7 @@ describe('message du jour', () => {
     const json = buildDayEmbed(board(), [
       task(1, { details: 'Jeudi 11h · ☎ 06', due_time: '11:00', label: 'Appeler Paul' }),
     ]).toJSON();
-    expect(json.description).toContain('**11:00 · Appeler Paul**');
-    expect(json.description).toContain('↳ Jeudi 11h · ☎ 06');
+    expect(json.description).toContain('1. `11:00` **Appeler Paul**\n   - Jeudi 11h · ☎ 06');
     expect(json.description).not.toContain('airtable.com');
     expect(json.footer).toBeUndefined();
     expect(json.author).toBeUndefined();
@@ -89,13 +88,13 @@ describe('message du jour', () => {
 
   it('barre une tâche faite sans ses détails', () => {
     const json = buildDayEmbed(board(), [task(1, { is_done: true, label: 'Fait' })]).toJSON();
-    expect(json.description).toContain('~~Fait~~');
-    expect(json.description).not.toContain('↳');
+    expect(json.description).toContain('1. ~~Fait~~');
+    expect(json.description).not.toContain('   - ');
   });
 
   it('liste les rappels du jour à part', () => {
     const json = buildDayEmbed(board(), [], [{ time: '09:00', label: 'Sport' }]).toJSON();
-    expect(json.fields).toEqual([{ name: '⏰ Rappels', value: '09:00 · Sport' }]);
+    expect(json.fields).toEqual([{ name: '⏰ Rappels', value: '- `09:00` Sport' }]);
   });
 
   it('range les heures fixes en premier', () => {
@@ -132,17 +131,17 @@ describe('dayIntro', () => {
 describe('message de la semaine', () => {
   it('présente les 6 jours suivants, sans aujourd’hui, triés par heure', () => {
     const json = buildWeekEmbed(board(), [
-      { date: '2026-10-09', time: '14:00', label: '🤝 R1 avec Dina', kind: 'airtable' },
+      { date: '2026-10-09', time: '14:00', label: 'R1 avec Dina', kind: 'airtable' },
       { date: '2026-10-09', time: '09:00', label: 'Sport', kind: 'reminder' },
       { date: '2026-10-12', time: null, label: 'Préparer le devis', kind: 'planned' },
       { date: '2026-10-08', time: null, label: 'Aujourd’hui : pas ici', kind: 'planned' },
     ]).toJSON();
     expect(json.title).toBe('📅 Ta semaine · ven. 09/10 → mer. 14/10');
     expect(json.description).toContain(
-      '**Vendredi 09/10**\n`09:00` ⏰ Sport\n`14:00` 🤝 R1 avec Dina',
+      '**Vendredi 09/10**\n- `09:00` Sport (rappel)\n- `14:00` R1 avec Dina',
     );
     expect(json.description).toContain('**Samedi 10/10**\n*Rien de prévu*');
-    expect(json.description).toContain('**Lundi 12/10**\nPréparer le devis');
+    expect(json.description).toContain('**Lundi 12/10**\n- Préparer le devis');
     expect(json.description).not.toContain('Jeudi 08/10');
     expect(json.description).not.toContain('pas ici');
   });

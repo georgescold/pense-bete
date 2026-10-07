@@ -115,10 +115,10 @@ describe('libellés', () => {
 
   it('formule la tâche selon l’action', () => {
     const base = { nom: 'Paul', cabinet: 'Atelier Martin' };
-    expect(taskLabel(lead({ ...base, action: 'a call' }))).toBe('📞 Appeler Paul · Atelier Martin');
-    expect(taskLabel(lead({ ...base, action: 'R2' }))).toBe('🤝 R2 avec Paul · Atelier Martin');
+    expect(taskLabel(lead({ ...base, action: 'a call' }))).toBe('Appeler Paul · Atelier Martin');
+    expect(taskLabel(lead({ ...base, action: 'R2' }))).toBe('R2 avec Paul · Atelier Martin');
     expect(taskLabel(lead({ ...base, action: 'Devis envoyé' }))).toBe(
-      '📌 Devis envoyé · Paul · Atelier Martin',
+      'Devis envoyé : Paul · Atelier Martin',
     );
   });
 
@@ -235,11 +235,11 @@ describe('buildAgenda', () => {
 
   it('met les 6 jours suivants dans la semaine, avec l’heure', () => {
     expect(agenda.people.Enzo.upcoming).toEqual([
-      { date: '2026-10-09', time: '14:00', label: '🤝 R1 avec Dina' },
-      { date: '2026-10-13', time: null, label: '🤝 R2 avec Elie' },
+      { date: '2026-10-09', time: '14:00', label: 'R1 avec Dina' },
+      { date: '2026-10-13', time: null, label: 'R2 avec Elie' },
     ]);
     expect(agenda.people.Loys.upcoming).toEqual([
-      { date: '2026-10-08', time: null, label: '🔁 Relancer Fanny' },
+      { date: '2026-10-08', time: null, label: 'Relancer Fanny' },
     ]);
   });
 

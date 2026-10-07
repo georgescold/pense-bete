@@ -380,25 +380,15 @@ async function publishBoard(
 }
 
 /**
- * Rendez-vous de 6h et relectures de la journée : un tableau par personne.
- * Publier un tableau déjà posté le met simplement à jour, sans nouvelle
- * mention.
- *
- * @param onlyMissing ne traiter que les personnes dont les messages du jour
- * manquent (rattrapage au démarrage, sans relire Airtable pour rien).
+ * Rendez-vous de 6h, relectures de la journée et démarrage : un tableau par
+ * personne. Publier un tableau déjà posté le met simplement à jour, sans
+ * nouvelle mention.
  */
-export async function publishBoards(client: Client, onlyMissing = false): Promise<void> {
+export async function publishBoards(client: Client): Promise<void> {
   const date = essortToday();
-  const members: EssortMember[] = [];
-  for (const m of essortMembers) {
-    const existing = onlyMissing ? await getBoard(m.person, date) : null;
-    if (!existing?.message_id || !existing.week_message_id) members.push(m);
-  }
-  if (members.length === 0) return;
-
   const agenda = await readAgenda(date, SCHEDULED_READ_DELAYS);
   const failures: unknown[] = [];
-  for (const m of members) {
+  for (const m of essortMembers) {
     try {
       await publishBoard(client, m, date, agenda);
     } catch (err) {
