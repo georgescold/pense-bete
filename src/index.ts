@@ -5,13 +5,15 @@ import {
   Interaction,
   MessageFlags,
 } from 'discord.js';
-import { config, dailyEnabled } from './config';
+import { config, dailyEnabled, essortEnabled } from './config';
 import { logger } from './logger';
 import { commandMap } from './commands';
 import { handleWizardInteraction, isWizardInteraction } from './commands/wizard';
 import { handleReminderComponent, isReminderComponent } from './commands/reminderActions';
 import { handleDailyInteraction, isDailyInteraction } from './daily/interactions';
 import { startDailyJobs } from './daily/jobs';
+import { handleEssortInteraction, isEssortInteraction } from './essort/interactions';
+import { startEssortJobs } from './essort/jobs';
 import { buildHelpEmbed } from './lib/embeds';
 import { Scheduler } from './scheduler/scheduler';
 import { listAllActive, updateNextRunAt } from './db/repository';
@@ -101,6 +103,12 @@ async function main(): Promise<void> {
           : 'journées de travail désactivées (DAILY_CHANNEL_ID / DAILY_USER_ID absents)',
       );
     }
+
+    if (essortEnabled) {
+      startEssortJobs(client);
+    } else {
+      logger.info('tableaux Essort désactivés (AIRTABLE_TOKEN ou salons ESSORT_* absents)');
+    }
   });
 
   client.on(Events.InteractionCreate, async (interaction: Interaction) => {
@@ -166,6 +174,30 @@ async function main(): Promise<void> {
         await handleDailyInteraction(interaction);
       } catch (err) {
         logger.error({ err, customId: interaction.customId }, 'daily interaction failed');
+        const msg = err instanceof Error ? err.message : 'Erreur inconnue';
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          } else {
+            await interaction.followUp({ content: `❌ ${msg}`, flags: MessageFlags.Ephemeral });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+
+    if (
+      (interaction.isButton() ||
+        interaction.isStringSelectMenu() ||
+        interaction.isModalSubmit()) &&
+      isEssortInteraction(interaction.customId)
+    ) {
+      try {
+        await handleEssortInteraction(interaction);
+      } catch (err) {
+        logger.error({ err, customId: interaction.customId }, 'essort interaction failed');
         const msg = err instanceof Error ? err.message : 'Erreur inconnue';
         try {
           if (!interaction.replied && !interaction.deferred) {
