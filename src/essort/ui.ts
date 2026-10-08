@@ -76,14 +76,18 @@ function timed(time: string | null, text: string): string {
 }
 
 /**
- * Une tâche = un élément de liste numérotée (le numéro est celui du bouton),
- * sa consigne en sous-puce : une ligne trop longue revient à la ligne sous son
- * propre texte au lieu de se mêler à la tâche suivante.
+ * Une tâche : « 1. » (le numéro du bouton) et son titre en gras, puis sa
+ * consigne en texte simple sur la ligne suivante. Pas de liste Markdown : une
+ * puce sous la tâche se lisait comme une tâche de plus.
  */
 function taskLine(t: EssortTaskRow, position: number, withDetails: boolean): string {
-  if (t.is_done) return `${position}. ~~${t.due_time ? `${t.due_time} ` : ''}${t.label}~~`;
-  const sub = withDetails && t.details ? `\n   - ${t.details}` : '';
-  return `${position}. ${timed(t.due_time, `**${t.label}**`)}${sub}`;
+  if (t.is_done) return `~~${position}. ${t.due_time ? `${t.due_time} ` : ''}${t.label}~~`;
+  const sub =
+    withDetails && t.details
+      ? `
+${t.details}`
+      : '';
+  return `**${position}.** ${timed(t.due_time, `**${t.label}**`)}${sub}`;
 }
 
 /** Les détails s'effacent sur les dernières tâches si la liste déborde. */

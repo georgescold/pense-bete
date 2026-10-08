@@ -6,6 +6,7 @@ import {
   buildAgenda,
   compareTime,
   dueTime,
+  eventNote,
   leadName,
   leadSteps,
   padDate,
@@ -125,14 +126,41 @@ describe('libellés', () => {
 
   it('ne détaille que la consigne, le téléphone et un retard', () => {
     const l = lead({
+      action: 'a call',
       prochainEvenement: 'Rappel promis',
       telephone: '06 00 00 00 00',
       verdict: '🟢 Chaud',
     });
-    expect(taskDetails(l, '2026-10-05', TODAY)).toBe(
-      'Rappel promis · ☎ 06 00 00 00 00 · prévu le 05/10',
+    const step = leadSteps({ ...l, dateAction: '2026-10-05' }, TODAY)[0]!;
+    expect(taskDetails(l, step, TODAY)).toBe(
+      'Rappel promis · ☎ 06 00 00 00 00 · en retard, prévu le 05/10',
     );
-    expect(taskDetails(lead({}), TODAY, TODAY)).toBe('');
+    const empty = lead({ dateAction: TODAY });
+    expect(taskDetails(empty, leadSteps(empty, TODAY)[0]!, TODAY)).toBe('');
+  });
+
+  it('ne donne le téléphone que s’il faut appeler', () => {
+    const base = { telephone: '06 00', dateAction: TODAY };
+    const doc = lead({ ...base, action: 'Attente de doc', prochainEvenement: 'Doc à envoyer' });
+    expect(taskDetails(doc, leadSteps(doc, TODAY)[0]!, TODAY)).toBe('Doc à envoyer');
+    const r1 = lead({ ...base, action: 'R1', prochainEvenement: 'appel téléphonique' });
+    expect(taskDetails(r1, leadSteps(r1, TODAY)[0]!, TODAY)).toBe('Appel téléphonique · ☎ 06 00');
+    const prep = lead({ ...base, action: 'a call', prochainEvenement: 'Lundi 12/10 à 11h' });
+    expect(taskDetails(prep, leadSteps(prep, TODAY)[0]!, TODAY)).toBe('Lundi 12/10 à 11h');
+  });
+
+  it('retire de la consigne le jour et l’heure déjà affichés', () => {
+    const t = 'Jeudi 08/10 appel téléphonique à 11h (sauf si message insta reçu)';
+    expect(eventNote(t, '2026-10-08', '11:00', TODAY)).toBe(
+      'Appel téléphonique (sauf si message insta reçu)',
+    );
+    expect(eventNote('Lundi 12/10 à 11h - doc à préparer', '2026-10-08', null, TODAY)).toBe(
+      'Lundi 12/10 à 11h - doc à préparer',
+    );
+    expect(eventNote('Lundi 12/10 entre 16h et 16h30', '2026-10-12', '16:00', TODAY)).toBe(
+      'Entre 16h et 16h30',
+    );
+    expect(eventNote('Vendredi 09/10 à 14h', '2026-10-09', '14:00', TODAY)).toBeNull();
   });
 
   it('change de signature quand l’action ou la date changent', () => {
@@ -177,8 +205,20 @@ describe('leadSteps', () => {
       prochainEvenement: 'Lundi 12/10 à 11h - doc à préparer',
     });
     expect(leadSteps(l, day)).toEqual([
-      { date: day, time: null, label: 'Préparer le R2 avec Isabelle', signature: 'r2|2026-10-08' },
-      { date: '2026-10-12', time: '11:00', label: 'R2 avec Isabelle', signature: 'r2|2026-10-12' },
+      {
+        date: day,
+        time: null,
+        label: 'Préparer le R2 avec Isabelle',
+        signature: 'r2|2026-10-08',
+        prep: true,
+      },
+      {
+        date: '2026-10-12',
+        time: '11:00',
+        label: 'R2 avec Isabelle',
+        signature: 'r2|2026-10-12',
+        prep: false,
+      },
     ]);
   });
 
@@ -224,6 +264,7 @@ describe('leadSteps', () => {
         time: null,
         label: 'R1 avec Lead sans nom',
         signature: 'r1|2026-10-01',
+        prep: false,
       },
     ]);
   });
