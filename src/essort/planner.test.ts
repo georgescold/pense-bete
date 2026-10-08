@@ -7,6 +7,7 @@ import {
   compareTime,
   dueTime,
   leadName,
+  leadSteps,
   padDate,
   parseEventDate,
   parseTime,
@@ -128,19 +129,17 @@ describe('libellés', () => {
       telephone: '06 00 00 00 00',
       verdict: '🟢 Chaud',
     });
-    expect(taskDetails(l, { date: '2026-10-05', inferred: true }, TODAY)).toBe(
+    expect(taskDetails(l, '2026-10-05', TODAY)).toBe(
       'Rappel promis · ☎ 06 00 00 00 00 · prévu le 05/10',
     );
-    expect(taskDetails(lead({}), { date: TODAY, inferred: false }, TODAY)).toBe('');
+    expect(taskDetails(lead({}), TODAY, TODAY)).toBe('');
   });
 
   it('change de signature quand l’action ou la date changent', () => {
     const l = lead({ action: 'a call' });
-    const a = signatureOf(l, { date: '2026-10-08', inferred: false });
-    expect(signatureOf(l, { date: '2026-10-09', inferred: false })).not.toBe(a);
-    expect(signatureOf({ ...l, action: 'R1' }, { date: '2026-10-08', inferred: false })).not.toBe(
-      a,
-    );
+    const a = signatureOf(l, '2026-10-08');
+    expect(signatureOf(l, '2026-10-09')).not.toBe(a);
+    expect(signatureOf({ ...l, action: 'R1' }, '2026-10-08')).not.toBe(a);
   });
 });
 
@@ -164,6 +163,69 @@ describe('heures', () => {
 
   it('range les heures fixes d’abord', () => {
     expect(['10:00', null, '09:00'].sort(compareTime)).toEqual(['09:00', '10:00', null]);
+  });
+});
+
+describe('leadSteps', () => {
+  const day = '2026-10-08';
+
+  it('sépare la préparation du rendez-vous quand le texte donne une date plus tardive', () => {
+    const l = lead({
+      nom: 'Isabelle',
+      action: 'R2',
+      dateAction: day,
+      prochainEvenement: 'Lundi 12/10 à 11h - doc à préparer',
+    });
+    expect(leadSteps(l, day)).toEqual([
+      { date: day, time: null, label: 'Préparer le R2 avec Isabelle', signature: 'r2|2026-10-08' },
+      { date: '2026-10-12', time: '11:00', label: 'R2 avec Isabelle', signature: 'r2|2026-10-12' },
+    ]);
+  });
+
+  it('place le rendez-vous au jour du texte, même si le champ date est la veille', () => {
+    const l = lead({
+      nom: 'Pierre-Hugo',
+      action: 'R2',
+      dateAction: '2026-10-11',
+      prochainEvenement: 'Lundi 12/10 entre 16h et 16h30',
+    });
+    const steps = leadSteps(l, day);
+    expect(steps.map((s) => [s.date, s.time, s.label])).toEqual([
+      ['2026-10-11', null, 'Préparer le R2 avec Pierre-Hugo'],
+      ['2026-10-12', '16:00', 'R2 avec Pierre-Hugo'],
+    ]);
+  });
+
+  it('une seule étape quand les dates concordent, ou hors rendez-vous', () => {
+    const same = lead({
+      action: 'a call',
+      dateAction: day,
+      prochainEvenement: 'Jeudi 08/10 à 11h',
+    });
+    expect(leadSteps(same, day)).toHaveLength(1);
+    expect(leadSteps(same, day)[0]!.time).toBe('11:00');
+    const doc = lead({
+      action: 'Attente de doc',
+      dateAction: '2026-10-07',
+      prochainEvenement: 'Doc à envoyer pour vendredi 09/10 ?',
+    });
+    expect(leadSteps(doc, day).map((s) => s.date)).toEqual(['2026-10-07']);
+  });
+
+  it('un rendez-vous passé ne laisse que lui-même', () => {
+    const l = lead({
+      action: 'R1',
+      dateAction: '2026-10-01',
+      prochainEvenement: 'lun. 05/10 à 10h',
+    });
+    expect(leadSteps(l, day)).toEqual([
+      {
+        date: '2026-10-01',
+        time: null,
+        label: 'R1 avec Lead sans nom',
+        signature: 'r1|2026-10-01',
+      },
+    ]);
   });
 });
 
