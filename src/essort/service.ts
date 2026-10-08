@@ -145,8 +145,15 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
     if (history.some((t) => t.signature === due.signature && t.board_id !== board.id)) continue;
 
     // Même lead, autre action ou autre date : on met la tâche à jour sur place
-    // plutôt que d'en empiler une seconde.
-    const pending = onBoard.find((t) => !t.is_done && !t.dismissed_at);
+    // plutôt que d'en empiler une seconde. Pas celle d'une autre étape du lead
+    // encore due (la préparation d'un R2 le jour du R2).
+    const stepSignatures = new Set(
+      plan.due.filter((d) => d.recordId === due.recordId).map((d) => d.signature),
+    );
+    const pending = onBoard.find(
+      (t) =>
+        !t.is_done && !t.dismissed_at && !keep.has(t.id) && !stepSignatures.has(t.signature ?? ''),
+    );
     if (pending) {
       keep.add(pending.id);
       await updateTask(pending.id, {

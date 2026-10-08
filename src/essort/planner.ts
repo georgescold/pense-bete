@@ -13,6 +13,9 @@ import type { Lead } from './airtable';
  *    « fin octobre »…) ;
  *  - l'heure vient de « Prochain événement » (« à 11h »), si ce texte parle
  *    bien du même jour ;
+ *  - pour un rendez-vous (appel, R1, R2) dont le texte donne une date plus
+ *    tardive (« Lundi 12/10 à 11h »), le champ date est celui de la
+ *    préparation : « Préparer le R2 » ce jour-là, le R2 lui-même à sa date ;
  *  - « Gestion » désigne le tableau (Loys ou Enzo) ;
  *  - un lead « dead » disparaît ;
  *  - échu (date ≤ aujourd'hui) = tâche du jour, en retard compris ;
@@ -237,6 +240,21 @@ export function taskLabel(lead: Lead): string {
   }
 }
 
+/** « Préparer le R2 avec … » : le jour du champ date, avant le rendez-vous. */
+export function prepLabel(lead: Lead): string {
+  const who = leadName(lead);
+  switch (actionKind(lead.action)) {
+    case 'call':
+      return `Préparer l'appel avec ${who}`;
+    case 'r1':
+      return `Préparer le R1 avec ${who}`;
+    case 'r2':
+      return `Préparer le R2 avec ${who}`;
+    default:
+      return `Préparer : ${taskLabel(lead)}`;
+  }
+}
+
 /** 'YYYY-MM-DD' → '08/10'. */
 export function shortDate(date: string): string {
   return `${date.slice(8, 10)}/${date.slice(5, 7)}`;
@@ -257,17 +275,69 @@ export function dueTime(lead: Lead, due: DueDate, today: string): string | null 
 }
 
 /** Juste ce qu'il faut pour agir : la consigne, le téléphone, un retard éventuel. */
-export function taskDetails(lead: Lead, due: DueDate, today: string): string {
+export function taskDetails(lead: Lead, date: string, today: string): string {
   const parts: string[] = [];
   if (lead.prochainEvenement) parts.push(truncateText(lead.prochainEvenement, 120));
   if (lead.telephone) parts.push(`☎ ${lead.telephone}`);
-  if (daysBetween(due.date, today) > 0) parts.push(`prévu le ${shortDate(due.date)}`);
+  if (daysBetween(date, today) > 0) parts.push(`prévu le ${shortDate(date)}`);
   return parts.join(' · ');
 }
 
 /** Identifie « cette » action d'un lead : une fois validée, elle ne revient pas. */
-export function signatureOf(lead: Lead, due: DueDate): string {
-  return `${normalizeAction(lead.action) || 'none'}|${due.date}`;
+export function signatureOf(lead: Lead, date: string): string {
+  return `${normalizeAction(lead.action) || 'none'}|${date}`;
+}
+
+/** Actions qui sont un rendez-vous fixé à une date. */
+const MEETING_KINDS: ReadonlySet<ActionKind> = new Set(['call', 'r1', 'r2']);
+
+export interface LeadStep {
+  date: string;
+  /** 'HH:MM' ou null. */
+  time: string | null;
+  label: string;
+  signature: string;
+}
+
+/**
+ * Ce qu'un lead met à l'agenda : en général une seule étape. Pour un
+ * rendez-vous à venir dont le texte donne une date plus tardive que le champ
+ * date, deux : la préparation (date du champ) puis le rendez-vous (date et
+ * heure du texte). Un rendez-vous passé ne laisse que lui-même, en retard.
+ */
+export function leadSteps(lead: Lead, today: string): LeadStep[] {
+  const due = resolveDueDate(lead, today);
+  if (!due) return [];
+  const eventDate = parseEventDate(lead.prochainEvenement, today);
+  if (
+    MEETING_KINDS.has(actionKind(lead.action)) &&
+    eventDate &&
+    eventDate > due.date &&
+    eventDate >= today
+  ) {
+    return [
+      {
+        date: due.date,
+        time: null,
+        label: prepLabel(lead),
+        signature: signatureOf(lead, due.date),
+      },
+      {
+        date: eventDate,
+        time: parseTime(lead.prochainEvenement),
+        label: taskLabel(lead),
+        signature: signatureOf(lead, eventDate),
+      },
+    ];
+  }
+  return [
+    {
+      date: due.date,
+      time: dueTime(lead, due, today),
+      label: taskLabel(lead),
+      signature: signatureOf(lead, due.date),
+    },
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -332,24 +402,24 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
   for (const lead of leads) {
     if (actionKind(lead.action) === 'dead') continue;
     const person = personOf(lead);
-    const due = resolveDueDate(lead, today);
-    if (!person || !due) continue;
+    if (!person) continue;
 
     const agenda = people[person];
-    const delta = daysBetween(today, due.date);
-    const time = dueTime(lead, due, today);
-    if (delta <= 0) {
-      agenda.due.push({
-        recordId: lead.id,
-        signature: signatureOf(lead, due),
-        label: taskLabel(lead),
-        details: taskDetails(lead, due, today),
-        dueDate: due.date,
-        time,
-      });
-      heats.set(lead.id, heat(lead));
-    } else if (delta <= weekDays) {
-      agenda.upcoming.push({ date: due.date, time, label: taskLabel(lead) });
+    for (const step of leadSteps(lead, today)) {
+      const delta = daysBetween(today, step.date);
+      if (delta <= 0) {
+        agenda.due.push({
+          recordId: lead.id,
+          signature: step.signature,
+          label: step.label,
+          details: taskDetails(lead, step.date, today),
+          dueDate: step.date,
+          time: step.time,
+        });
+        heats.set(lead.id, heat(lead));
+      } else if (delta <= weekDays) {
+        agenda.upcoming.push({ date: step.date, time: step.time, label: step.label });
+      }
     }
   }
 
