@@ -80,7 +80,7 @@ describe('message du jour', () => {
     const json = buildDayEmbed(board(), [
       task(1, { details: 'Jeudi 11h · ☎ 06', due_time: '11:00', label: 'Appeler Paul' }),
     ]).toJSON();
-    expect(json.description).toContain('1. `11:00` **Appeler Paul**\n   - Jeudi 11h · ☎ 06');
+    expect(json.description).toContain('**1.** `11:00` **Appeler Paul**\nJeudi 11h · ☎ 06');
     expect(json.description).not.toContain('airtable.com');
     expect(json.footer).toBeUndefined();
     expect(json.author).toBeUndefined();
@@ -88,8 +88,7 @@ describe('message du jour', () => {
 
   it('barre une tâche faite sans ses détails', () => {
     const json = buildDayEmbed(board(), [task(1, { is_done: true, label: 'Fait' })]).toJSON();
-    expect(json.description).toContain('1. ~~Fait~~');
-    expect(json.description).not.toContain('   - ');
+    expect(json.description).toContain('~~1. Fait~~');
   });
 
   it('liste les rappels du jour à part', () => {

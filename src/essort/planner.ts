@@ -274,12 +274,51 @@ export function dueTime(lead: Lead, due: DueDate, today: string): string | null 
   return parseTime(lead.prochainEvenement);
 }
 
-/** Juste ce qu'il faut pour agir : la consigne, le téléphone, un retard éventuel. */
-export function taskDetails(lead: Lead, date: string, today: string): string {
+// « Jeudi 08/10 », « le 08/10 », « jeu. 8.10.2026 ».
+const DATE_PHRASE =
+  /(?:(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|lun|mar|mer|jeu|ven|sam|dim)\.?\s+)?(?:le\s+)?(?<![\d./])\d{1,2}\s*[/.]\s*\d{1,2}(?:\s*[/.]\s*(?:\d{4}|\d{2}))?(?![./]?\d)/gi;
+// « à 11h », « à 9h30 », « 14:00 ».
+const AT_TIME = /à\s*(?<![\d:.])(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?(?!\d)/gi;
+
+/**
+ * La consigne de « Prochain événement » sans ce que la tâche affiche déjà :
+ * « Jeudi 08/10 appel téléphonique à 11h » devient « Appel téléphonique »
+ * sur la tâche de 11h du 08/10. Une date ou une heure différentes restent :
+ * elles disent quelque chose (« Lundi 12/10 à 11h » sur une préparation).
+ */
+export function eventNote(
+  text: string | null,
+  date: string,
+  time: string | null,
+  today: string,
+): string | null {
+  if (!text) return null;
+  let note = text.replace(DATE_PHRASE, (m) => (parseEventDate(m, today) === date ? ' ' : m));
+  if (time) note = note.replace(AT_TIME, (m) => (parseTime(m) === time ? ' ' : m));
+  note = note
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,).])/g, '$1')
+    .replace(/\(\s+/g, '(')
+    .replace(/^[\s\-–—·,:]+|[\s\-–—·,:]+$/g, '');
+  if (!note) return null;
+  return note.charAt(0).toUpperCase() + note.slice(1);
+}
+
+/** Le téléphone ne sert que s'il faut appeler : un appel, une relance, ou un texte qui le dit. */
+function needsPhone(lead: Lead, step: LeadStep): boolean {
+  if (step.prep) return false;
+  const kind = actionKind(lead.action);
+  if (kind === 'call' || kind === 'relance') return true;
+  return /appel|t[eé]l[eé]phon/i.test(lead.prochainEvenement ?? '');
+}
+
+/** Juste ce qu'il faut pour agir : la consigne, le téléphone s'il faut appeler, un retard. */
+export function taskDetails(lead: Lead, step: LeadStep, today: string): string {
   const parts: string[] = [];
-  if (lead.prochainEvenement) parts.push(truncateText(lead.prochainEvenement, 120));
-  if (lead.telephone) parts.push(`☎ ${lead.telephone}`);
-  if (daysBetween(date, today) > 0) parts.push(`prévu le ${shortDate(date)}`);
+  const note = eventNote(lead.prochainEvenement, step.date, step.time, today);
+  if (note) parts.push(truncateText(note, 120));
+  if (lead.telephone && needsPhone(lead, step)) parts.push(`☎ ${lead.telephone}`);
+  if (daysBetween(step.date, today) > 0) parts.push(`en retard, prévu le ${shortDate(step.date)}`);
   return parts.join(' · ');
 }
 
@@ -297,6 +336,8 @@ export interface LeadStep {
   time: string | null;
   label: string;
   signature: string;
+  /** Vrai pour la préparation d'un rendez-vous, avant le rendez-vous lui-même. */
+  prep: boolean;
 }
 
 /**
@@ -321,12 +362,14 @@ export function leadSteps(lead: Lead, today: string): LeadStep[] {
         time: null,
         label: prepLabel(lead),
         signature: signatureOf(lead, due.date),
+        prep: true,
       },
       {
         date: eventDate,
         time: parseTime(lead.prochainEvenement),
         label: taskLabel(lead),
         signature: signatureOf(lead, eventDate),
+        prep: false,
       },
     ];
   }
@@ -336,6 +379,7 @@ export function leadSteps(lead: Lead, today: string): LeadStep[] {
       time: dueTime(lead, due, today),
       label: taskLabel(lead),
       signature: signatureOf(lead, due.date),
+      prep: false,
     },
   ];
 }
@@ -412,7 +456,7 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
           recordId: lead.id,
           signature: step.signature,
           label: step.label,
-          details: taskDetails(lead, step.date, today),
+          details: taskDetails(lead, step, today),
           dueDate: step.date,
           time: step.time,
         });
