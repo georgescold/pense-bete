@@ -7,10 +7,11 @@ import {
 } from 'discord.js';
 import { essortMembers } from '../config';
 import { logger } from '../logger';
-import { getBoardById, listPlannedTasks, listTasks } from '../db/essortRepository';
-import { addDays, parseTimeInput } from './planner';
+import { getBoardById, getTask, listPlannedTasks, listTasks } from '../db/essortRepository';
+import { addDays, parseDayInput, parseTimeInput } from './planner';
 import {
   carryAll,
+  editTask,
   essortToday,
   finishEvening,
   planTask,
@@ -21,6 +22,8 @@ import {
   unplanTasks,
 } from './service';
 import {
+  buildEditModal,
+  buildEditPickMenu,
   buildPlanDayMenu,
   buildRemoveMenu,
   buildTaskModal,
@@ -214,6 +217,83 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
       const removed = await unplanTasks(select.client, board, ids);
       await select.editReply({ content: removedMessage(removed) });
       logger.info({ board: board.id, removed, by: doneBy }, 'taches planifiees retirees');
+      return;
+    }
+
+    // --- Modifier une tâche (depuis le jour ou la semaine) ---------------------
+
+    case 'edit':
+    case 'wedit': {
+      const fromWeek = parsed.action === 'wedit';
+      const items = fromWeek
+        ? (await listPlannedTasks(board.person, addDays(board.board_date, 1), '9999-12-31'))
+            .filter((t) => !t.is_done)
+            .map((task) => ({ task, date: task.essort_boards.board_date }))
+        : dayOrder(await listTasks(board.id))
+            .filter((t) => !t.is_done)
+            .map((task) => ({ task, date: board.board_date }));
+      if (items.length === 0) {
+        await interaction.reply({
+          content: fromWeek
+            ? 'Aucune tâche planifiée sur les jours à venir. Les actions du CRM se modifient dans Airtable.'
+            : 'Aucune tâche à modifier aujourd’hui.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await interaction.reply({
+        content: 'Quelle tâche modifier ?',
+        components: [buildEditPickMenu(board, items, fromWeek)],
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    case 'editpick': {
+      const select = interaction as StringSelectMenuInteraction;
+      const task = await getTask(Number(select.values[0]));
+      const taskBoard = task ? await getBoardById(task.board_id) : null;
+      if (!task || !taskBoard || task.dismissed_at || task.is_done) {
+        await select.update({
+          content: 'Cette tâche n’existe plus ou est déjà faite.',
+          components: [],
+        });
+        return;
+      }
+      await select.showModal(buildEditModal(board.id, task, taskBoard.board_date));
+      return;
+    }
+
+    case 'editmodal': {
+      const modal = interaction as ModalSubmitInteraction;
+      const taskId = Number(parsed.extra);
+      const label = modal.fields.getTextInputValue('label').replace(/\s+/g, ' ').trim();
+      const date = parseDayInput(modal.fields.getTextInputValue('day'), essortToday());
+      const time = parseTimeInput(modal.fields.getTextInputValue('time'));
+      const problem = !label
+        ? 'Le texte de la tâche est vide.'
+        : !date
+          ? 'Jour illisible : écris par exemple **demain**, **lundi** ou **12/10**.'
+          : date < essortToday()
+            ? 'Ce jour est déjà passé.'
+            : time === undefined
+              ? 'Heure illisible : écris par exemple **14h30**, **9h** ou **14:30**.'
+              : null;
+      if (problem || !date || time === undefined) {
+        await modal.reply({
+          content: `Rien n’a été modifié. ${problem}`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await modal.deferUpdate();
+      const done = await editTask(modal.client, board, taskId, { label, date, time });
+      await modal.editReply({
+        content: done
+          ? `✏️ Modifié · **${dayLabel(date)}**${time ? ` à **${time}**` : ''} : ${label}`
+          : 'Rien n’a été modifié : la tâche n’existe plus ou est déjà faite.',
+        components: [],
+      });
       return;
     }
 

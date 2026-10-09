@@ -154,7 +154,8 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
     const same = onBoard.find((t) => t.signature === due.signature);
     if (same) {
       keep.add(same.id);
-      const open = !same.is_done && !same.dismissed_at;
+      // Modifiée depuis Discord : la version de la personne l'emporte.
+      const open = !same.is_done && !same.dismissed_at && !same.edited_at;
       const changed =
         same.label !== due.label || same.details !== due.details || same.due_time !== due.time;
       if (open && changed) {
@@ -188,6 +189,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
         details: due.details,
         due_time: due.time,
         pings_sent: 0,
+        edited_at: null,
       });
       continue;
     }
@@ -580,6 +582,48 @@ export async function planTask(
     if (isToday) await schedulePings(client, todayBoard.id);
   });
   logger.info({ person: todayBoard.person, date, time, label }, 'tache Essort planifiee');
+}
+
+/**
+ * Modifie une tâche (texte, jour, heure) et renvoie son nouvel intitulé, ou
+ * null si elle n'existe plus. Changer de jour la déplace sur le tableau de ce
+ * jour ; changer d'heure reprogramme ses pings. Une tâche venue du CRM garde
+ * la modification tant que l'action ou sa date ne changent pas dans Airtable.
+ */
+export function editTask(
+  client: Client,
+  todayBoard: EssortBoardRow,
+  taskId: number,
+  change: { label: string; date: string; time: string | null },
+): Promise<string | null> {
+  return withBoardLock(todayBoard.id, async () => {
+    const task = await getTask(taskId);
+    if (!task || task.dismissed_at || task.is_done) return null;
+    const from = await getBoardById(task.board_id);
+    if (!from || from.person !== todayBoard.person) return null;
+
+    if (change.date !== from.board_date) {
+      const { board: target } = await ensureBoard(
+        todayBoard.person,
+        change.date,
+        todayBoard.channel_id,
+      );
+      await moveTask(task.id, target.id, nextPosition(await listTasks(target.id, true)), null);
+    }
+    const timeChanged = change.time !== task.due_time || change.date !== from.board_date;
+    await updateTask(task.id, {
+      label: change.label,
+      due_time: change.time,
+      ...(timeChanged ? { pings_sent: 0 } : {}),
+      ...(task.source === 'airtable' ? { edited_at: new Date().toISOString() } : {}),
+    });
+
+    // Le jour et la semaine peuvent changer tous les deux (déplacement).
+    await renderBoard(client, todayBoard.id);
+    await schedulePings(client, todayBoard.id);
+    logger.info({ person: todayBoard.person, taskId, ...change }, 'tache Essort modifiee');
+    return change.label;
+  });
 }
 
 /**

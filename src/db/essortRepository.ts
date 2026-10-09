@@ -49,6 +49,8 @@ export interface EssortTaskRow {
   dismissed_at: string | null;
   /** Tableau d'où la tâche a été reportée le soir (pour annuler le report). */
   carried_from: number | null;
+  /** Modifiée depuis Discord : une relecture du CRM ne la réécrit pas. */
+  edited_at: string | null;
   sheet_range: string | null;
   created_at: string;
 }
@@ -72,6 +74,7 @@ export type TaskPatch = Partial<
     | 'details'
     | 'due_time'
     | 'pings_sent'
+    | 'edited_at'
     | 'signature'
     | 'position'
     | 'is_done'
