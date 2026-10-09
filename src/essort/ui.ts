@@ -210,6 +210,12 @@ export function buildDayComponents(board: EssortBoardRow, tasks: EssortTaskRow[]
         .setEmoji('➕')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
+        .setCustomId(`essort:edit:${board.id}`)
+        .setLabel('Modifier')
+        .setEmoji('✏️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(!tasks.some((t) => !t.is_done)),
+      new ButtonBuilder()
         .setCustomId(`essort:remove:${board.id}`)
         .setLabel('Retirer')
         .setEmoji('🗑️')
@@ -294,6 +300,12 @@ export function buildWeekComponents(board: EssortBoardRow, plannedCount: number)
         .setLabel('Planifier')
         .setEmoji('➕')
         .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`essort:wedit:${board.id}`)
+        .setLabel('Modifier')
+        .setEmoji('✏️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(plannedCount === 0),
       new ButtonBuilder()
         .setCustomId(`essort:unplan:${board.id}`)
         .setLabel('Retirer')
@@ -517,4 +529,84 @@ export function crmUpdateMessage(changes: CrmAction[], today: string): string {
     return `- ${when} · ${timed(a.time, a.label)}`;
   });
   return truncate(`Agenda mis à jour depuis le CRM :\n${lines.join('\n')}`, 1900);
+}
+
+// ---------------------------------------------------------------------------
+// Modifier une tâche
+// ---------------------------------------------------------------------------
+
+/** Une tâche modifiable et son jour. */
+export interface EditableTask {
+  task: EssortTaskRow;
+  date: string;
+}
+
+/**
+ * Quelle tâche modifier ? Depuis le jour : celles d'aujourd'hui ; depuis la
+ * semaine : celles posées sur les jours à venir (avec leur jour).
+ */
+export function buildEditPickMenu(
+  board: EssortBoardRow,
+  items: EditableTask[],
+  withDay: boolean,
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const options = items.slice(0, MAX_OPTIONS);
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`essort:editpick:${board.id}`)
+      .setPlaceholder('Tâche à modifier…')
+      .addOptions(
+        options.map(({ task, date }, i) => {
+          const option = new StringSelectMenuOptionBuilder()
+            .setValue(String(task.id))
+            .setLabel(
+              truncate(
+                withDay
+                  ? withTime(task.due_time, task.label)
+                  : `${i + 1}. ${withTime(task.due_time, task.label)}`,
+                100,
+              ),
+            );
+          return withDay ? option.setDescription(dayLabel(date)) : option;
+        }),
+      ),
+  );
+}
+
+/** Le formulaire, prérempli : on ne change que ce qu'on veut. */
+export function buildEditModal(boardId: number, task: EssortTaskRow, date: string): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`essort:editmodal:${boardId}:${task.id}`)
+    .setTitle('Modifier la tâche')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId('label')
+          .setLabel('Tâche')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(200)
+          .setRequired(true)
+          .setValue(truncate(task.label, 200)),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId('day')
+          .setLabel('Jour')
+          .setPlaceholder('Ex. : demain, lundi, 12/10')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(30)
+          .setRequired(true)
+          .setValue(dayLabel(date)),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId('time')
+          .setLabel('Heure (vide = sans heure)')
+          .setPlaceholder('Ex. : 14h30')
+          .setStyle(TextInputStyle.Short)
+          .setMaxLength(5)
+          .setRequired(false)
+          .setValue(task.due_time ?? ''),
+      ),
+    );
 }

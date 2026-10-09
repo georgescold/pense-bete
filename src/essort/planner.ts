@@ -786,3 +786,26 @@ export function duplicatesCrm(
   if (crm.match.prep) return /\bprepa/.test(text);
   return crm.match.meeting && MEETING_WORDS.test(text) && !OTHER_ACTION_WORDS.test(text);
 }
+
+const WEEKDAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+
+/**
+ * Jour tapé à la main : « aujourd'hui », « demain », « après-demain »,
+ * « lundi » (le prochain, aujourd'hui compris), « 12/10 », « Lundi 12/10 ».
+ * Renvoie 'YYYY-MM-DD' ou null si illisible.
+ */
+export function parseDayInput(input: string, today: string): string | null {
+  const t = stripAccents(input).replace(/[’]/g, "'").toLowerCase().trim();
+  if (!t) return null;
+  if (/^(aujourd'?hui|auj|ajd)$/.test(t)) return today;
+  if (t === 'demain') return addDays(today, 1);
+  if (/^apres[- ]demain$/.test(t)) return addDays(today, 2);
+  const written = textDates(input, today)[0];
+  if (written) return written;
+  const word = t.split(/[^a-z]+/)[0] ?? '';
+  const target = word.length >= 3 ? WEEKDAYS.findIndex((w) => w.startsWith(word)) : -1;
+  if (target < 0) return null;
+  const [y, m, d] = today.split('-').map(Number);
+  const current = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12)).getUTCDay();
+  return addDays(today, (target - current + 7) % 7);
+}

@@ -144,6 +144,7 @@ qu'il a compris (« Agenda mis à jour depuis le CRM : - Mardi 13/10 · `14:00` 
 **📅 Ta semaine** — les 6 jours suivants (pas aujourd'hui) : actions Airtable, tâches planifiées,
 rappels, chacun à son heure.
 - **➕ Planifier** : un jour (d'aujourd'hui à J+24), une tâche, une heure facultative.
+- **✏️ Modifier** : une tâche posée sur un jour à venir (texte, jour, heure), formulaire prérempli.
 - **🗑️ Retirer** : une tâche planifiée sur un jour à venir.
 - **⏰ Rappels** : la liste de ses rappels ; ➕ en créer un (même formulaire que `/rappel ajouter`),
   ou en choisir un pour le mettre en pause, le réactiver ou le supprimer.
@@ -153,7 +154,10 @@ rappels, chacun à son heure.
 consigne (« Prochain événement ») et le téléphone. Les rappels du jour sont listés dessous.
 - **✔️ n** valide une tâche : elle part aussitôt dans l'onglet « Essort » du Google Sheet
   (décocher efface la ligne).
-- **➕ Ajouter** (heure facultative), **🗑️ Retirer** n'importe quelle tâche. Une tâche Airtable
+- **➕ Ajouter** (heure facultative), **✏️ Modifier** (texte, jour — « demain », « lundi », « 12/10 » —
+  et heure ; changer de jour déplace la tâche, changer d'heure reprogramme ses pings), **🗑️ Retirer**
+  n'importe quelle tâche. Une tâche du CRM modifiée ici garde la modification tant que l'action ou
+  sa date ne changent pas dans Airtable. Une tâche Airtable
   retirée ou validée ne revient pas tant que sa date ou son action ne changent pas dans Airtable.
 - **Rien n'est reporté automatiquement.** À 19h, s'il reste des tâches non faites, le bot
   tague la personne et demande lesquelles passer au lendemain : un bouton numéroté par tâche

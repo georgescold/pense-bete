@@ -40,6 +40,7 @@ function task(id: number, partial: Partial<EssortTaskRow> = {}): EssortTaskRow {
     details: `${'Rappel prévu en fin de matinée, préparer le devis et les références '.repeat(2)} · ☎ 06 00 00 00 00`,
     due_time: null,
     pings_sent: 0,
+    edited_at: null,
     position: id,
     is_done: false,
     done_at: null,
@@ -147,11 +148,12 @@ describe('message de la semaine', () => {
     expect(json.description).not.toContain('pas ici');
   });
 
-  it('propose de planifier, retirer, gérer les rappels et actualiser', () => {
+  it('propose de planifier, modifier, retirer, gérer les rappels et actualiser', () => {
     const [row] = buildWeekComponents(board(), 0).map((r) => r.toJSON());
     const buttons = row!.components as { label?: string; disabled?: boolean }[];
     expect(buttons.map((c) => [c.label, Boolean(c.disabled)])).toEqual([
       ['Planifier', false],
+      ['Modifier', true],
       ['Retirer', true],
       ['Rappels', false],
       ['Actualiser', false],
