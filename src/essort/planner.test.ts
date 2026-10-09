@@ -12,10 +12,13 @@ import {
   padDate,
   parseEventDate,
   parseTime,
+  personOf,
+  previousBusinessDay,
   resolveDueDate,
   signatureOf,
   taskDetails,
   taskLabel,
+  textDates,
 } from './planner';
 
 const TODAY = '2026-10-07';
@@ -211,6 +214,8 @@ describe('leadSteps', () => {
         label: 'Préparer le R2 avec Isabelle',
         signature: 'r2|2026-10-08',
         prep: true,
+        kind: 'r2',
+        note: 'Lundi 12/10 à 11h - doc à préparer',
       },
       {
         date: '2026-10-12',
@@ -218,6 +223,8 @@ describe('leadSteps', () => {
         label: 'R2 avec Isabelle',
         signature: 'r2|2026-10-12',
         prep: false,
+        kind: 'r2',
+        note: 'Doc à préparer',
       },
     ]);
   });
@@ -265,8 +272,123 @@ describe('leadSteps', () => {
         label: 'R1 avec Lead sans nom',
         signature: 'r1|2026-10-01',
         prep: false,
+        kind: 'r1',
+        note: 'Lun. 05/10 à 10h',
       },
     ]);
+  });
+});
+
+describe('lecture fine du CRM', () => {
+  const today = '2026-10-09'; // un vendredi
+
+  it('texte à plusieurs dates : seule la partie de la date de l’action compte', () => {
+    const l = lead({
+      nom: 'Cynthia',
+      action: 'Attente de doc',
+      dateAction: '2026-10-13',
+      telephone: '06 00',
+      prochainEvenement:
+        'Doc envoyé vendredi 09/10 - en attente de sa réponse, proposition d’appel téléphonique pour mardi 13/10 matin',
+    });
+    const [step, ...rest] = leadSteps(l, today);
+    expect(rest).toEqual([]);
+    expect(step).toMatchObject({ date: '2026-10-13', kind: 'call', label: 'Appeler Cynthia' });
+    expect(step!.note).toBe('Proposition d’appel téléphonique matin');
+    expect(taskDetails(l, step!, today)).toBe('Proposition d’appel téléphonique matin · ☎ 06 00');
+  });
+
+  it('ignore un texte qui raconte un événement passé, antérieur à l’action', () => {
+    const l = lead({
+      nom: 'Éloïse',
+      action: 'R2',
+      dateAction: '2026-10-14',
+      prochainEvenement: 'Vendredi 09/10 à 14h appel téléphonique',
+    });
+    // Lu le lendemain de l'appel : le texte est périmé.
+    expect(leadSteps(l, '2026-10-10')).toEqual([
+      {
+        date: '2026-10-14',
+        time: null,
+        label: 'R2 avec Éloïse',
+        signature: 'r2|2026-10-14',
+        prep: false,
+        kind: 'r2',
+        note: null,
+      },
+    ]);
+    // Le jour même, l'appel est peut-être encore à venir : on le garde.
+    expect(leadSteps(l, today)[0]!.note).toBe('Vendredi 09/10 à 14h appel téléphonique');
+  });
+
+  it('« doc à préparer » le jour du rendez-vous : préparation le jour ouvré d’avant', () => {
+    const mardi = lead({
+      nom: 'Vincent',
+      action: 'R2',
+      dateAction: '2026-10-13',
+      prochainEvenement: 'Mar. 13/10 à 14 h · R2 · document à préparer, avec le cas client Homère',
+    });
+    expect(leadSteps(mardi, today).map((s) => [s.date, s.time, s.label, s.prep])).toEqual([
+      ['2026-10-12', null, 'Préparer le R2 avec Vincent', true],
+      ['2026-10-13', '14:00', 'R2 avec Vincent', false],
+    ]);
+    const lundi = lead({
+      nom: 'Chloé',
+      action: 'R2',
+      dateAction: '2026-10-12',
+      prochainEvenement: 'Lun. 12/10 à 10 h · R2 · doc à préparer',
+    });
+    expect(leadSteps(lundi, today).map((s) => [s.date, s.label])).toEqual([
+      ['2026-10-09', 'Préparer le R2 avec Chloé'],
+      ['2026-10-12', 'R2 avec Chloé'],
+    ]);
+    // Rendez-vous passé : pas de préparation après coup.
+    const passe = {
+      ...lundi,
+      dateAction: '2026-10-05',
+      prochainEvenement: 'Lun. 05/10 à 10 h · R2 · doc à préparer',
+    };
+    expect(leadSteps(passe, today)).toHaveLength(1);
+  });
+
+  it('une action « à relancer » que le texte décrit comme un appel devient un appel', () => {
+    const l = lead({
+      nom: 'Corinne',
+      action: 'A relancer ( une date )',
+      prochainEvenement: 'En attente de sa réponse au mail sinon à rappeler mardi 13/10',
+    });
+    const [step] = leadSteps(l, today);
+    expect(step).toMatchObject({ date: '2026-10-13', kind: 'call', label: 'Appeler Corinne' });
+    expect(step!.note).toBe('En attente de sa réponse au mail sinon à rappeler');
+    // Sans verbe d'action dans le texte, la colonne « Action » reste maîtresse.
+    const r = lead({ action: 'A relancer ( une date )', prochainEvenement: 'fin octobre, examen' });
+    expect(leadSteps(r, today)[0]!.kind).toBe('relance');
+    // Un rendez-vous n'est jamais renommé par le texte.
+    const rdv = lead({ action: 'R1', dateAction: '2026-10-12', prochainEvenement: 'appel' });
+    expect(leadSteps(rdv, today)[0]!.kind).toBe('r1');
+  });
+
+  it('date déduite du texte : la première à venir', () => {
+    const l = lead({ prochainEvenement: 'Mail envoyé le 05/10, rappeler le 13/10 ou le 15/10' });
+    expect(resolveDueDate(l, today)).toEqual({ date: '2026-10-13', inferred: true });
+    expect(textDates(l.prochainEvenement, today)).toEqual([
+      '2026-10-05',
+      '2026-10-13',
+      '2026-10-15',
+    ]);
+  });
+
+  it('la bonne personne : Gestion, sinon le seul prénom de l’équipe cité', () => {
+    expect(personOf(lead({ gestion: 'Loys', prochainEvenement: 'Enzo appelle' }))).toBe('Loys');
+    expect(personOf(lead({ prochainEvenement: 'Lun. 12/10 · Enzo appelle Hélène' }))).toBe('Enzo');
+    expect(personOf(lead({ prochainEvenement: 'Loys et Enzo en visio' }))).toBeNull();
+    expect(personOf(lead({}))).toBeNull();
+  });
+
+  it('jour ouvré précédent', () => {
+    expect(previousBusinessDay('2026-10-12')).toBe('2026-10-09'); // lundi → vendredi
+    expect(previousBusinessDay('2026-10-11')).toBe('2026-10-09'); // dimanche → vendredi
+    expect(previousBusinessDay('2026-10-14')).toBe('2026-10-13');
   });
 });
 
@@ -342,7 +464,7 @@ describe('buildAgenda', () => {
       { date: '2026-10-13', time: null, label: 'R2 avec Elie' },
     ]);
     expect(agenda.people.Loys.upcoming).toEqual([
-      { date: '2026-10-08', time: null, label: 'Relancer Fanny' },
+      { date: '2026-10-08', time: null, label: 'Appeler Fanny' },
     ]);
   });
 

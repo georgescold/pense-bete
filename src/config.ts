@@ -34,9 +34,10 @@ const schema = z.object({
   AIRTABLE_BASE_ID: z.string().default('appWdzyvFb3DaqPXk'),
   AIRTABLE_LEADS_TABLE: z.string().default('tblcpyeIaC9qJPOnJ'),
   ESSORT_CRON: z.string().default('0 6 * * *'),
-  // Relectures d'Airtable dans la journée : le tableau du matin est mis à jour
-  // sur place, sans nouveau message ni mention.
-  ESSORT_REFRESH_CRON: z.string().default('0 12,17 * * *'),
+  // Synchro avec le CRM : Airtable est relu toutes les 5 minutes ; un
+  // changement met à jour les messages du jour (sans mention) et le bot dit
+  // en une ligne ce qu'il a compris.
+  ESSORT_SYNC_CRON: z.string().default('*/5 * * * *'),
   // Le soir, le bot demande quelles tâches non faites passer au lendemain.
   // Rien n'est jamais reporté sans réponse.
   ESSORT_EVENING_CRON: z.string().default('0 19 * * *'),
@@ -103,9 +104,7 @@ console.log(`[config] SUPABASE_URL=${config.SUPABASE_URL}`);
 console.log(
   `[config] journées=${
     dailyEnabled ? 'activées' : config.DAILY_PAUSED ? 'en veille' : 'désactivées'
-  } sheets=${
-    config.GOOGLE_SERVICE_ACCOUNT_JSON ? 'compte de service' : 'non configuré'
-  } essort=${
+  } sheets=${config.GOOGLE_SERVICE_ACCOUNT_JSON ? 'compte de service' : 'non configuré'} essort=${
     essortEnabled
       ? essortMembers.map((m) => m.person).join('+')
       : config.AIRTABLE_TOKEN

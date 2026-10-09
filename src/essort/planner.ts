@@ -16,7 +16,16 @@ import type { Lead } from './airtable';
  *  - pour un rendez-vous (appel, R1, R2) dont le texte donne une date plus
  *    tardive (« Lundi 12/10 à 11h »), le champ date est celui de la
  *    préparation : « Préparer le R2 » ce jour-là, le R2 lui-même à sa date ;
- *  - « Gestion » désigne le tableau (Loys ou Enzo) ;
+ *  - un rendez-vous dont le texte dit « doc à préparer » le jour même amène
+ *    « Préparer le R2 » le jour ouvré d'avant ;
+ *  - un texte à plusieurs dates n'est lu que pour la partie qui concerne la
+ *    date de l'action ; un texte dont toutes les dates sont passées par
+ *    rapport à l'action raconte l'événement précédent : il est ignoré ;
+ *  - quand « Action » décrit un état (« Attente de doc », « A relancer »…)
+ *    et que le texte dit quoi faire (« appel téléphonique », « R2 »), c'est
+ *    le texte qui nomme la tâche ;
+ *  - « Gestion » désigne le tableau (Loys ou Enzo) ; vide, le prénom de
+ *    l'équipe cité dans le texte (« Enzo appelle Hélène ») ;
  *  - un lead « dead » disparaît ;
  *  - échu (date ≤ aujourd'hui) = tâche du jour, en retard compris ;
  *  - dans les 6 jours suivants = planning de la semaine.
@@ -112,6 +121,29 @@ const MONTH_PART = new RegExp(
   `(?<![a-z])(debut|mi|fin)[\\s-]+(?:d'\\s*)?(${Object.keys(MONTHS).join('|')})`,
   'i',
 );
+const MONTH_PART_ALL = new RegExp(MONTH_PART.source, 'gi');
+
+/** Toutes les dates écrites dans un texte, dans l'ordre, sans doublon. */
+export function textDates(text: string | null, today: string): string[] {
+  if (!text) return [];
+  const plain = stripAccents(text).replace(/[’]/g, "'").toLowerCase();
+  const dates: string[] = [];
+  for (const m of plain.matchAll(NUMERIC_DATE)) {
+    const day = Number(m[1]);
+    const month = Number(m[2]);
+    const rawYear = m[3];
+    const date = rawYear
+      ? makeDate(rawYear.length === 2 ? 2000 + Number(rawYear) : Number(rawYear), month, day)
+      : nearestDate(month, day, today);
+    if (date) dates.push(date);
+  }
+  for (const m of plain.matchAll(MONTH_PART_ALL)) {
+    const month = MONTHS[m[2]!];
+    const date = month ? nearestDate(month, MONTH_PART_DAY[m[1]!] ?? 1, today) : null;
+    if (date) dates.push(date);
+  }
+  return [...new Set(dates)];
+}
 
 /**
  * Lit une date dans un texte libre comme « A appeler jeudi 08/10 » ou
@@ -161,19 +193,25 @@ export interface DueDate {
   inferred: boolean;
 }
 
+/**
+ * La date de l'action : le champ date ; à défaut, la première date à venir du
+ * texte (« Doc envoyé le 09/10, rappeler le 13/10 » → le 13/10), sinon la
+ * plus récente.
+ */
 export function resolveDueDate(lead: Lead, today: string): DueDate | null {
   if (lead.dateAction && ISO_DATE.test(lead.dateAction)) {
     return { date: padDate(lead.dateAction), inferred: false };
   }
-  const parsed = parseEventDate(lead.prochainEvenement, today);
-  return parsed ? { date: parsed, inferred: true } : null;
+  const dates = [...textDates(lead.prochainEvenement, today)].sort();
+  if (dates.length === 0) return null;
+  return { date: dates.find((d) => d >= today) ?? dates[dates.length - 1]!, inferred: true };
 }
 
 // ---------------------------------------------------------------------------
 // Libellés
 // ---------------------------------------------------------------------------
 
-type ActionKind =
+export type ActionKind =
   | 'call'
   | 'r1'
   | 'r2'
@@ -216,9 +254,9 @@ export function leadName(lead: Lead): string {
 }
 
 /** Libellé en texte seul : les emojis se rendent mal et alourdissent la liste. */
-export function taskLabel(lead: Lead): string {
+export function taskLabel(lead: Lead, kind: ActionKind = actionKind(lead.action)): string {
   const who = leadName(lead);
-  switch (actionKind(lead.action)) {
+  switch (kind) {
     case 'call':
       return `Appeler ${who}`;
     case 'r1':
@@ -241,9 +279,9 @@ export function taskLabel(lead: Lead): string {
 }
 
 /** « Préparer le R2 avec … » : le jour du champ date, avant le rendez-vous. */
-export function prepLabel(lead: Lead): string {
+export function prepLabel(lead: Lead, kind: ActionKind = actionKind(lead.action)): string {
   const who = leadName(lead);
-  switch (actionKind(lead.action)) {
+  switch (kind) {
     case 'call':
       return `Préparer l'appel avec ${who}`;
     case 'r1':
@@ -251,7 +289,7 @@ export function prepLabel(lead: Lead): string {
     case 'r2':
       return `Préparer le R2 avec ${who}`;
     default:
-      return `Préparer : ${taskLabel(lead)}`;
+      return `Préparer : ${taskLabel(lead, kind)}`;
   }
 }
 
@@ -274,9 +312,9 @@ export function dueTime(lead: Lead, due: DueDate, today: string): string | null 
   return parseTime(lead.prochainEvenement);
 }
 
-// « Jeudi 08/10 », « le 08/10 », « jeu. 8.10.2026 ».
+// « Jeudi 08/10 », « le 08/10 », « jeu. 8.10.2026 », « pour mardi 13/10 ».
 const DATE_PHRASE =
-  /(?:(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|lun|mar|mer|jeu|ven|sam|dim)\.?\s+)?(?:le\s+)?(?<![\d./])\d{1,2}\s*[/.]\s*\d{1,2}(?:\s*[/.]\s*(?:\d{4}|\d{2}))?(?![./]?\d)/gi;
+  /(?:pour\s+)?(?:(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|lun|mar|mer|jeu|ven|sam|dim)\.?\s+)?(?:le\s+)?(?<![\d./])\d{1,2}\s*[/.]\s*\d{1,2}(?:\s*[/.]\s*(?:\d{4}|\d{2}))?(?![./]?\d)/gi;
 // « à 11h », « à 9h30 », « 14:00 ».
 const AT_TIME = /à\s*(?<![\d:.])(?:[01]?\d|2[0-3])\s*(?:h|:)\s*(?:[0-5]\d)?(?!\d)/gi;
 
@@ -305,19 +343,17 @@ export function eventNote(
 }
 
 /** Le téléphone ne sert que s'il faut appeler : un appel, une relance, ou un texte qui le dit. */
-function needsPhone(lead: Lead, step: LeadStep): boolean {
+function needsPhone(step: LeadStep): boolean {
   if (step.prep) return false;
-  const kind = actionKind(lead.action);
-  if (kind === 'call' || kind === 'relance') return true;
-  return /appel|t[eé]l[eé]phon/i.test(lead.prochainEvenement ?? '');
+  if (step.kind === 'call' || step.kind === 'relance') return true;
+  return /appel|t[eé]l[eé]phon/i.test(step.note ?? '');
 }
 
 /** Juste ce qu'il faut pour agir : la consigne, le téléphone s'il faut appeler, un retard. */
 export function taskDetails(lead: Lead, step: LeadStep, today: string): string {
   const parts: string[] = [];
-  const note = eventNote(lead.prochainEvenement, step.date, step.time, today);
-  if (note) parts.push(truncateText(note, 120));
-  if (lead.telephone && needsPhone(lead, step)) parts.push(`☎ ${lead.telephone}`);
+  if (step.note) parts.push(truncateText(step.note, 120));
+  if (lead.telephone && needsPhone(step)) parts.push(`☎ ${lead.telephone}`);
   if (daysBetween(step.date, today) > 0) parts.push(`en retard, prévu le ${shortDate(step.date)}`);
   return parts.join(' · ');
 }
@@ -330,6 +366,71 @@ export function signatureOf(lead: Lead, date: string): string {
 /** Actions qui sont un rendez-vous fixé à une date. */
 const MEETING_KINDS: ReadonlySet<ActionKind> = new Set(['call', 'r1', 'r2']);
 
+/** Découpe « A - B, C · D » en morceaux, pour isoler ce qui concerne une date. */
+function segmentsOf(text: string): string[] {
+  return text
+    .split(/\s+[-–—·]\s+|\s*;\s*|,\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export interface TextReading {
+  /** Ce que le texte dit de l'action à cette date, ou null. */
+  note: string | null;
+  time: string | null;
+}
+
+/**
+ * Ce que dit « Prochain événement » de l'action prévue à `date` :
+ *  - texte sans date, ou qui ne parle que de cette date : tel quel ;
+ *  - texte à plusieurs dates : seuls les morceaux qui citent cette date
+ *    (« Doc envoyé le 09/10 - appel mardi 13/10 matin » → « appel … matin ») ;
+ *  - texte dont toutes les dates sont passées et précèdent l'action : il
+ *    raconte l'événement d'avant (« Vendredi 09/10 appel » pour un R2 le
+ *    14/10, lu le 10/10), on l'ignore ;
+ *  - texte qui parle d'un moment plus tardif : il éclaire la tâche (« Lundi
+ *    12/10 à 11h » sur une préparation) sans lui donner son heure.
+ */
+export function readTextFor(text: string | null, date: string, today: string): TextReading {
+  if (!text) return { note: null, time: null };
+  const dates = textDates(text, today);
+  if (dates.length === 0) return { note: text, time: parseTime(text) };
+  if (dates.includes(date)) {
+    if (dates.length === 1) return { note: text, time: parseTime(text) };
+    const own = segmentsOf(text)
+      .filter((part) => textDates(part, today).includes(date))
+      .join(' · ');
+    return { note: own || text, time: parseTime(own || text) };
+  }
+  // Seulement si ces dates sont aussi passées : un appel encore à venir
+  // aujourd'hui, avant un R2 plus tard, reste affiché.
+  if (dates.every((d) => d < date && d < today)) return { note: null, time: null };
+  return { note: text, time: null };
+}
+
+/**
+ * L'action à mener : celle de la colonne « Action », sauf quand elle décrit
+ * un état (« Attente de doc », « A relancer »…) et que le texte dit quoi
+ * faire (« proposition d'appel téléphonique mardi 13/10 », « R2 lundi »).
+ */
+export function stepKind(lead: Lead, note: string | null): ActionKind {
+  const base = actionKind(lead.action);
+  if (MEETING_KINDS.has(base) || base === 'dead' || !note) return base;
+  const t = stripAccents(note).toLowerCase();
+  if (/\br\s?2\b/.test(t)) return 'r2';
+  if (/\br\s?1\b/.test(t)) return 'r1';
+  if (/appel|telephon|\bcall\b/.test(t)) return 'call';
+  return base;
+}
+
+/** Jour ouvré précédent : la veille, ou le vendredi pour un lundi ou un week-end. */
+export function previousBusinessDay(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const weekday = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12)).getUTCDay();
+  const back = weekday === 1 ? 3 : weekday === 0 ? 2 : 1;
+  return addDays(date, -back);
+}
+
 export interface LeadStep {
   date: string;
   /** 'HH:MM' ou null. */
@@ -338,50 +439,76 @@ export interface LeadStep {
   signature: string;
   /** Vrai pour la préparation d'un rendez-vous, avant le rendez-vous lui-même. */
   prep: boolean;
+  /** L'action effective (colonne « Action », précisée par le texte). */
+  kind: ActionKind;
+  /** La consigne affichée sous la tâche, sans la date ni l'heure déjà montrées. */
+  note: string | null;
 }
 
 /**
  * Ce qu'un lead met à l'agenda : en général une seule étape. Pour un
  * rendez-vous à venir dont le texte donne une date plus tardive que le champ
  * date, deux : la préparation (date du champ) puis le rendez-vous (date et
- * heure du texte). Un rendez-vous passé ne laisse que lui-même, en retard.
+ * heure du texte). Un rendez-vous à venir qui demande « doc à préparer » le
+ * jour même : la préparation le jour ouvré d'avant. Un rendez-vous passé ne
+ * laisse que lui-même, en retard.
  */
 export function leadSteps(lead: Lead, today: string): LeadStep[] {
   const due = resolveDueDate(lead, today);
   if (!due) return [];
-  const eventDate = parseEventDate(lead.prochainEvenement, today);
-  if (
-    MEETING_KINDS.has(actionKind(lead.action)) &&
-    eventDate &&
-    eventDate > due.date &&
-    eventDate >= today
-  ) {
+  const text = lead.prochainEvenement;
+  const main = readTextFor(text, due.date, today);
+  const kind = stepKind(lead, main.note);
+  const later = [...textDates(text, today)].sort().find((d) => d > due.date && d >= today);
+
+  if (MEETING_KINDS.has(kind) && later) {
+    const event = readTextFor(text, later, today);
     return [
       {
         date: due.date,
         time: null,
-        label: prepLabel(lead),
+        label: prepLabel(lead, kind),
         signature: signatureOf(lead, due.date),
         prep: true,
+        kind,
+        note: eventNote(text, due.date, null, today),
       },
       {
-        date: eventDate,
-        time: parseTime(lead.prochainEvenement),
-        label: taskLabel(lead),
-        signature: signatureOf(lead, eventDate),
+        date: later,
+        time: event.time,
+        label: taskLabel(lead, kind),
+        signature: signatureOf(lead, later),
         prep: false,
+        kind,
+        note: eventNote(event.note, later, event.time, today),
       },
     ];
   }
-  return [
+
+  const steps: LeadStep[] = [
     {
       date: due.date,
-      time: dueTime(lead, due, today),
-      label: taskLabel(lead),
+      time: main.time,
+      label: taskLabel(lead, kind),
       signature: signatureOf(lead, due.date),
       prep: false,
+      kind,
+      note: eventNote(main.note, due.date, main.time, today),
     },
   ];
+  if (MEETING_KINDS.has(kind) && due.date >= today && /pr[eé]par/i.test(main.note ?? '')) {
+    const prepDate = previousBusinessDay(due.date);
+    steps.unshift({
+      date: prepDate,
+      time: null,
+      label: prepLabel(lead, kind),
+      signature: signatureOf(lead, prepDate),
+      prep: true,
+      kind,
+      note: eventNote(text, prepDate, null, today),
+    });
+  }
+  return steps;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,20 +531,39 @@ export interface UpcomingItem {
   label: string;
 }
 
+/** Une action lue dans le CRM, quelle que soit sa date. */
+export interface CrmAction {
+  /** Lead + action + date : la même clé tant que rien ne change dans Airtable. */
+  key: string;
+  date: string;
+  time: string | null;
+  label: string;
+}
+
 export interface PersonAgenda {
   /** À faire aujourd'hui (retards compris). */
   due: DueTask[];
   /** Les 6 jours suivants. */
   upcoming: UpcomingItem[];
+  /** Toutes les actions de la personne, pour dire ce qui a changé dans le CRM. */
+  actions: CrmAction[];
 }
 
 export interface Agenda {
   people: Record<EssortPerson, PersonAgenda>;
 }
 
-function personOf(lead: Lead): EssortPerson | null {
+/**
+ * Qui gère le client : la colonne « Gestion ». Vide, le seul prénom de
+ * l'équipe cité dans « Prochain événement » (« Enzo appelle Hélène »).
+ */
+export function personOf(lead: Lead): EssortPerson | null {
   const g = lead.gestion?.trim().toLowerCase();
-  return PEOPLE.find((p) => p.toLowerCase() === g) ?? null;
+  const managed = PEOPLE.find((p) => p.toLowerCase() === g);
+  if (managed) return managed;
+  const text = stripAccents(lead.prochainEvenement ?? '').toLowerCase();
+  const named = PEOPLE.filter((p) => new RegExp(`\\b${p.toLowerCase()}\\b`).test(text));
+  return named.length === 1 ? named[0]! : null;
 }
 
 /** Les leads chauds d'abord à date égale. */
@@ -439,7 +585,7 @@ export function compareTime(a: string | null, b: string | null): number {
 
 export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS): Agenda {
   const people = Object.fromEntries(
-    PEOPLE.map((p) => [p, { due: [], upcoming: [] } as PersonAgenda]),
+    PEOPLE.map((p) => [p, { due: [], upcoming: [], actions: [] } as PersonAgenda]),
   ) as Record<EssortPerson, PersonAgenda>;
   const heats = new Map<string, number>();
 
@@ -450,6 +596,12 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
 
     const agenda = people[person];
     for (const step of leadSteps(lead, today)) {
+      agenda.actions.push({
+        key: `${lead.id}|${step.signature}`,
+        date: step.date,
+        time: step.time,
+        label: step.label,
+      });
       const delta = daysBetween(today, step.date);
       if (delta <= 0) {
         agenda.due.push({
@@ -476,6 +628,7 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
         (heats.get(a.recordId) ?? 3) - (heats.get(b.recordId) ?? 3),
     );
     agenda.upcoming.sort((a, b) => a.date.localeCompare(b.date) || compareTime(a.time, b.time));
+    agenda.actions.sort((a, b) => a.date.localeCompare(b.date) || compareTime(a.time, b.time));
   }
 
   return { people };
