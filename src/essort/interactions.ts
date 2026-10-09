@@ -10,13 +10,13 @@ import { logger } from '../logger';
 import { getBoardById, listPlannedTasks, listTasks } from '../db/essortRepository';
 import { addDays, parseTimeInput } from './planner';
 import {
-  carryOver,
-  declineCarryOver,
+  carryAll,
   essortToday,
-  openTaskIds,
+  finishEvening,
   planTask,
   refreshBoard,
   removeTasks,
+  toggleCarry,
   toggleTasks,
   unplanTasks,
 } from './service';
@@ -225,34 +225,35 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
 
     // --- Question de 19h ----------------------------------------------------
 
-    case 'carry':
-    case 'carryall': {
-      const ids =
-        parsed.action === 'carry'
-          ? (interaction as StringSelectMenuInteraction).values.map(Number).filter(Number.isFinite)
-          : await openTaskIds(board);
-      await (interaction as ButtonInteraction | StringSelectMenuInteraction).update({
-        content: 'Report en cours…',
-        embeds: [],
-        components: [],
-      });
-      const carried = await carryOver(interaction.client, board, ids);
-      await (interaction as ButtonInteraction | StringSelectMenuInteraction).editReply({
-        content:
-          carried.length > 0
-            ? `Reporté à demain par ${doneBy} : ${carried.map((l) => `**${l}**`).join(', ')}`
-            : 'Rien à reporter : ces tâches sont déjà faites ou retirées.',
-      });
+    // Un clic sur un numéro : reporte la tâche, ou annule son report. La
+    // question reste ouverte pour en reporter d'autres.
+    case 'carrytoggle': {
+      const taskId = Number(parsed.extra);
+      await (interaction as ButtonInteraction).deferUpdate();
+      if (Number.isFinite(taskId)) await toggleCarry(interaction.client, board, [taskId]);
       return;
     }
 
+    // Repli au-delà de 20 tâches (et anciens messages à menu).
+    case 'carry': {
+      const select = interaction as StringSelectMenuInteraction;
+      const ids = select.values.map(Number).filter(Number.isFinite);
+      await select.deferUpdate();
+      await toggleCarry(select.client, board, ids);
+      return;
+    }
+
+    case 'carryall': {
+      await (interaction as ButtonInteraction).deferUpdate();
+      await carryAll(interaction.client, board, doneBy);
+      return;
+    }
+
+    // « Terminé » (et « Ne rien reporter » des anciens messages).
+    case 'carrydone':
     case 'carrynone': {
-      await declineCarryOver(board);
-      await (interaction as ButtonInteraction).update({
-        content: `Rien n’a été reporté (${doneBy}) : les tâches restent sur aujourd’hui.`,
-        embeds: [],
-        components: [],
-      });
+      await (interaction as ButtonInteraction).deferUpdate();
+      await finishEvening(interaction.client, board, doneBy);
       return;
     }
 

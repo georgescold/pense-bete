@@ -45,6 +45,8 @@ export interface EssortTaskRow {
   done_by: string | null;
   /** Retirée depuis Discord : invisible, mais gardée pour ne pas revenir. */
   dismissed_at: string | null;
+  /** Tableau d'où la tâche a été reportée le soir (pour annuler le report). */
+  carried_from: number | null;
   sheet_range: string | null;
   created_at: string;
 }
@@ -223,10 +225,33 @@ export type TaskWithBoard = EssortTaskRow & {
   essort_boards: Pick<EssortBoardRow, 'person' | 'board_date'>;
 };
 
-/** Rattache une tâche à un autre tableau (même ligne, nouvelle place). */
-export async function moveTask(id: number, boardId: number, position: number): Promise<void> {
-  const { error } = await supabase.from(TASKS).update({ board_id: boardId, position }).eq('id', id);
+/**
+ * Rattache une tâche à un autre tableau (même ligne, nouvelle place).
+ * @param carriedFrom tableau d'origine d'un report du soir, null pour l'effacer.
+ */
+export async function moveTask(
+  id: number,
+  boardId: number,
+  position: number,
+  carriedFrom: number | null,
+): Promise<void> {
+  const { error } = await supabase
+    .from(TASKS)
+    .update({ board_id: boardId, position, carried_from: carriedFrom, pinged_at: null })
+    .eq('id', id);
   if (error) throw new Error(`moveTask: ${error.message}`);
+}
+
+/** Tâches reportées le soir depuis ce tableau (où qu'elles soient maintenant). */
+export async function listCarriedFrom(boardId: number): Promise<EssortTaskRow[]> {
+  const { data, error } = await supabase
+    .from(TASKS)
+    .select()
+    .eq('carried_from', boardId)
+    .is('dismissed_at', null)
+    .order('id', { ascending: true });
+  if (error) throw new Error(`listCarriedFrom: ${error.message}`);
+  return (data ?? []) as EssortTaskRow[];
 }
 
 /** Tâches faites pas encore recopiées dans le Google Sheet. */
