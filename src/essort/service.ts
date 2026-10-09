@@ -32,6 +32,8 @@ import {
   buildAgenda,
   compareTime,
   padDate,
+  pingPlan,
+  untilText,
   WEEK_DAYS,
   type Agenda,
   type CrmAction,
@@ -151,7 +153,12 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
       const changed =
         same.label !== due.label || same.details !== due.details || same.due_time !== due.time;
       if (open && changed) {
-        await updateTask(same.id, { label: due.label, details: due.details, due_time: due.time });
+        await updateTask(same.id, {
+          label: due.label,
+          details: due.details,
+          due_time: due.time,
+          ...(same.due_time !== due.time ? { pings_sent: 0 } : {}),
+        });
       }
       continue;
     }
@@ -175,6 +182,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
         label: due.label,
         details: due.details,
         due_time: due.time,
+        pings_sent: 0,
       });
       continue;
     }
@@ -757,64 +765,67 @@ export async function finishEvening(
 }
 
 // ---------------------------------------------------------------------------
-// Pings à l'heure : « ⏰ 11:00 · Appeler… »
+// Pings avant l'heure : « ⏰ 14:00 (dans 30 min) · R2 avec… »
 // ---------------------------------------------------------------------------
 
-/** Un ping manqué de peu (redémarrage) part quand même ; au-delà, on s'abstient. */
-const LATE_PING_MS = 5 * 60_000;
-const pingTimers = new Map<number, NodeJS.Timeout>();
+/** Minuteurs en cours, par tâche (un par ping restant). */
+const pingTimers = new Map<number, NodeJS.Timeout[]>();
 
-/** Programme le ping de chaque tâche à heure fixe du tableau du jour. */
+function startOf(date: string, time: string): number {
+  const [year, month, day] = date.split('-').map(Number);
+  const [hour, minute] = time.split(':').map(Number);
+  return zonedWallClockToUtc({
+    year: year!,
+    month: month!,
+    day: day!,
+    hour: hour!,
+    minute: minute!,
+  }).getTime();
+}
+
+/** Programme les pings (1 h, 30 min, 10 min avant) des tâches à heure fixe du jour. */
 export async function schedulePings(client: Client, boardId: number): Promise<void> {
   const board = await getBoardById(boardId);
   if (!board || board.archived_at || board.board_date !== essortToday()) return;
-  const [year, month, day] = board.board_date.split('-').map(Number);
 
   for (const t of await listTasks(board.id)) {
-    if (!t.due_time || t.is_done || t.pinged_at) continue;
-    const [hour, minute] = t.due_time.split(':').map(Number);
-    const at = zonedWallClockToUtc({
-      year: year!,
-      month: month!,
-      day: day!,
-      hour: hour!,
-      minute: minute!,
-    });
-    const delay = at.getTime() - Date.now();
-    if (delay < -LATE_PING_MS) continue;
+    for (const timer of pingTimers.get(t.id) ?? []) clearTimeout(timer);
+    pingTimers.delete(t.id);
+    if (!t.due_time || t.is_done) continue;
 
-    const previous = pingTimers.get(t.id);
-    if (previous) clearTimeout(previous);
+    const plan = pingPlan(startOf(board.board_date, t.due_time), t.pings_sent, Date.now());
     pingTimers.set(
       t.id,
-      setTimeout(
-        () => {
-          void firePing(client, t.id).catch((err) =>
-            logger.error({ err, taskId: t.id }, 'ping Essort non envoye'),
+      plan.map(({ index, delay }) =>
+        setTimeout(() => {
+          void firePing(client, t.id, index).catch((err) =>
+            logger.error({ err, taskId: t.id, index }, 'ping Essort non envoye'),
           );
-        },
-        Math.max(0, delay),
+        }, delay),
       ),
     );
   }
 }
 
-async function firePing(client: Client, taskId: number): Promise<void> {
-  pingTimers.delete(taskId);
-  // On relit tout : la tâche a pu être faite, retirée ou déplacée entre-temps.
+async function firePing(client: Client, taskId: number, index: number): Promise<void> {
+  // On relit tout : la tâche a pu être faite, retirée, déplacée ou changer
+  // d'heure entre-temps.
   const task = await getTask(taskId);
-  if (!task?.due_time || task.is_done || task.dismissed_at || task.pinged_at) return;
+  if (!task?.due_time || task.is_done || task.dismissed_at || task.pings_sent > index) return;
   const board = await getBoardById(task.board_id);
   if (!board || board.archived_at || board.board_date !== essortToday()) return;
+  const start = startOf(board.board_date, task.due_time);
+  const now = Date.now();
+  if (start <= now) return;
   const channel = await fetchChannel(client, board.channel_id);
   if (!channel) return;
 
   const userId = memberOf(board.person)?.userId ?? null;
   await channel.send({
-    content: `⏰ ${userId ? `${userMention(userId)} ` : ''}**${task.due_time}** · ${task.label}`,
+    content: `⏰ ${userId ? `${userMention(userId)} ` : ''}**${task.due_time}** (${untilText(start, now)}) · ${task.label}`,
     allowedMentions: { users: userId ? [userId] : [] },
   });
-  await updateTask(task.id, { pinged_at: new Date().toISOString() });
+  await updateTask(task.id, { pings_sent: index + 1 });
 }
 
 /** Au démarrage : reprogrammer les pings du jour (les minuteurs ne survivent pas). */

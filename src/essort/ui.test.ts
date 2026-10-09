@@ -39,7 +39,7 @@ function task(id: number, partial: Partial<EssortTaskRow> = {}): EssortTaskRow {
     label: `Appeler Prénom Nom ${id} · Cabinet d’architecture au nom assez long`,
     details: `${'Rappel prévu en fin de matinée, préparer le devis et les références '.repeat(2)} · ☎ 06 00 00 00 00`,
     due_time: null,
-    pinged_at: null,
+    pings_sent: 0,
     position: id,
     is_done: false,
     done_at: null,
