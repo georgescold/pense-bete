@@ -388,3 +388,67 @@ export function buildUnplanMenu(
       ),
   );
 }
+
+// ---------------------------------------------------------------------------
+// 19h : « Reporter à demain ? »
+// ---------------------------------------------------------------------------
+
+export interface EveningMessage {
+  content: string;
+  embeds: EmbedBuilder[];
+  components: Row[];
+}
+
+/**
+ * Les tâches non faites du jour, à choisir dans un menu, ou tout / rien d'un
+ * clic. Rien n'est reporté sans réponse : elles restent sur le jour.
+ */
+export function buildEveningMessage(
+  board: EssortBoardRow,
+  open: EssortTaskRow[],
+  mention: string | null,
+): EveningMessage {
+  const options = open.slice(0, MAX_OPTIONS);
+  const count = open.length === 1 ? 'Il reste 1 tâche' : `Il reste ${open.length} tâches`;
+  return {
+    content: `${mention ? `${mention} ` : ''}${count} aujourd’hui. Lesquelles reporter à demain ?`,
+    embeds: [
+      new EmbedBuilder()
+        .setColor(COLOR_WEEK)
+        .setTitle(`🌙 Ce soir · ${dayLabel(board.board_date)}`)
+        .setDescription(
+          truncate(
+            open.map((t, i) => `**${i + 1}.** ${timed(t.due_time, t.label)}`).join('\n'),
+            LIST_BUDGET,
+          ),
+        )
+        .setFooter({ text: 'Sans réponse, rien n’est reporté.' }),
+    ],
+    components: [
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`essort:carry:${board.id}`)
+          .setPlaceholder('Choisir les tâches à reporter…')
+          .setMinValues(1)
+          .setMaxValues(options.length)
+          .addOptions(
+            options.map((t, i) =>
+              new StringSelectMenuOptionBuilder()
+                .setValue(String(t.id))
+                .setLabel(truncate(`${i + 1}. ${withTime(t.due_time, t.label)}`, 100)),
+            ),
+          ),
+      ) as Row,
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`essort:carryall:${board.id}`)
+          .setLabel('Tout reporter')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`essort:carrynone:${board.id}`)
+          .setLabel('Ne rien reporter')
+          .setStyle(ButtonStyle.Secondary),
+      ) as Row,
+    ],
+  };
+}

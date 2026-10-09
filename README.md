@@ -65,6 +65,7 @@ npm run dev               # tsx watch
 | `AIRTABLE_BASE_ID` / `AIRTABLE_LEADS_TABLE` | (Essort) par défaut la base et la table « Leads » d'Essort |
 | `ESSORT_CRON` | (Essort) par défaut `0 6 * * *` (6h, heure de Paris) |
 | `ESSORT_REFRESH_CRON` | (Essort) relectures d'Airtable, par défaut `0 12,17 * * *` (12h et 17h) |
+| `ESSORT_EVENING_CRON` | (Essort) question « reporter à demain ? », par défaut `0 19 * * *` (19h) |
 | `ESSORT_LOYS_CHANNEL_ID` / `ESSORT_ENZO_CHANNEL_ID` | (Essort) salon de chaque tableau ; sans salon, pas de tableau |
 | `ESSORT_LOYS_USER_ID` / `ESSORT_ENZO_USER_ID` | (Essort) pour mentionner la personne et réserver les boutons à l'équipe |
 
@@ -152,13 +153,17 @@ consigne (« Prochain événement ») et le téléphone. Les rappels du jour son
   (décocher efface la ligne).
 - **➕ Ajouter** (heure facultative), **🗑️ Retirer** n'importe quelle tâche. Une tâche Airtable
   retirée ou validée ne revient pas tant que sa date ou son action ne changent pas dans Airtable.
-- Une tâche non faite **reste affichée** les jours suivants, jusqu'à être faite ou retirée.
+- **Rien n'est reporté automatiquement.** À 19h, s'il reste des tâches non faites, le bot
+  tague la personne et demande lesquelles passer au lendemain (menu, « Tout reporter » ou
+  « Ne rien reporter »). Sans réponse, rien ne bouge : les tâches restent affichées sur leur
+  jour, non faites. Une action Airtable non reportée ne revient que si sa date ou son action
+  changent dans Airtable.
 - Une tâche à heure fixe déclenche un ping à l'heure dite : « ⏰ 11:00 · Appeler… ».
 
 Lecture d'Airtable : la date est *date de la prochaine action*, à défaut celle écrite dans
 *Prochain événement* (« jeudi 08/10 », « fin octobre »…) ; l'heure vient de *Prochain événement*
 (« à 11h ») si ce texte parle du même jour. Le libellé dépend de l'*Action* (a call, R1, R2, à
-relancer…), les leads `dead` sont ignorés. Bot redémarré après 6h : ce qui manque est publié au
+relancer…), les leads `dead` sont ignorés. Bot redémarré après 6h (ou 19h) : ce qui manque est publié au
 démarrage, les pings du jour sont reprogrammés.
 
 ## Tests

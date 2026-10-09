@@ -3,6 +3,7 @@ import type { EssortBoardRow, EssortTaskRow } from '../db/essortRepository';
 import {
   buildDayComponents,
   buildDayEmbed,
+  buildEveningMessage,
   buildPlanDayMenu,
   buildWeekComponents,
   buildWeekEmbed,
@@ -177,5 +178,29 @@ describe('parseTimeInput', () => {
     expect(parseTimeInput('')).toBeNull();
     expect(parseTimeInput('25h')).toBeUndefined();
     expect(parseTimeInput('demain')).toBeUndefined();
+  });
+});
+
+describe('question du soir', () => {
+  it('tague la personne et propose de choisir, tout ou rien reporter', () => {
+    const open = [
+      task(1, { label: 'Appeler Paul', due_time: '11:00' }),
+      task(2, { label: 'Devis' }),
+    ];
+    const msg = buildEveningMessage(board(), open, '<@1>');
+    expect(msg.content).toBe('<@1> Il reste 2 tâches aujourd’hui. Lesquelles reporter à demain ?');
+    expect(msg.embeds[0]!.toJSON().description).toBe('**1.** `11:00` Appeler Paul\n**2.** Devis');
+    const [select, buttons] = msg.components.map((r) => r.toJSON());
+    const menu = select!.components[0] as {
+      custom_id: string;
+      max_values: number;
+      options: unknown[];
+    };
+    expect(menu.custom_id).toBe('essort:carry:1');
+    expect(menu.max_values).toBe(2);
+    expect((buttons!.components as { label: string }[]).map((b) => b.label)).toEqual([
+      'Tout reporter',
+      'Ne rien reporter',
+    ]);
   });
 });

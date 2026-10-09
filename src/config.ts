@@ -37,6 +37,9 @@ const schema = z.object({
   // Relectures d'Airtable dans la journée : le tableau du matin est mis à jour
   // sur place, sans nouveau message ni mention.
   ESSORT_REFRESH_CRON: z.string().default('0 12,17 * * *'),
+  // Le soir, le bot demande quelles tâches non faites passer au lendemain.
+  // Rien n'est jamais reporté sans réponse.
+  ESSORT_EVENING_CRON: z.string().default('0 19 * * *'),
   // Une personne n'a de tableau que si son salon est défini. L'identifiant
   // Discord sert à la mentionner et à limiter qui peut cocher.
   ESSORT_LOYS_CHANNEL_ID: z.string().optional(),
