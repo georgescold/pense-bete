@@ -515,6 +515,16 @@ export function leadSteps(lead: Lead, today: string): LeadStep[] {
 // Agenda
 // ---------------------------------------------------------------------------
 
+/** De quoi reconnaître une action du CRM dans une tâche écrite à la main. */
+export interface CrmMatch {
+  /** Prénom, nom, nom du cabinet du lead, sans les mots trop courants. */
+  names: string[];
+  /** Un rendez-vous (appel, R1, R2), pas sa préparation. */
+  meeting: boolean;
+  /** La préparation d'un rendez-vous. */
+  prep: boolean;
+}
+
 export interface DueTask {
   recordId: string;
   signature: string;
@@ -523,12 +533,14 @@ export interface DueTask {
   dueDate: string;
   /** 'HH:MM' ou null. */
   time: string | null;
+  match: CrmMatch;
 }
 
 export interface UpcomingItem {
   date: string;
   time: string | null;
   label: string;
+  match: CrmMatch;
 }
 
 /** Une action lue dans le CRM, quelle que soit sa date. */
@@ -538,6 +550,7 @@ export interface CrmAction {
   date: string;
   time: string | null;
   label: string;
+  match: CrmMatch;
 }
 
 export interface PersonAgenda {
@@ -595,12 +608,19 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
     if (!person) continue;
 
     const agenda = people[person];
+    const names = leadTokens(lead);
     for (const step of leadSteps(lead, today)) {
+      const match: CrmMatch = {
+        names,
+        meeting: MEETING_KINDS.has(step.kind) && !step.prep,
+        prep: step.prep,
+      };
       agenda.actions.push({
         key: `${lead.id}|${step.signature}`,
         date: step.date,
         time: step.time,
         label: step.label,
+        match,
       });
       const delta = daysBetween(today, step.date);
       if (delta <= 0) {
@@ -611,10 +631,11 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
           details: taskDetails(lead, step, today),
           dueDate: step.date,
           time: step.time,
+          match,
         });
         heats.set(lead.id, heat(lead));
       } else if (delta <= weekDays) {
-        agenda.upcoming.push({ date: step.date, time: step.time, label: step.label });
+        agenda.upcoming.push({ date: step.date, time: step.time, label: step.label, match });
       }
     }
   }
@@ -692,4 +713,76 @@ export function untilText(start: number, now: number): string {
   if (minutes < 60) return `dans ${minutes} min`;
   const rest = minutes % 60;
   return `dans ${Math.floor(minutes / 60)} h${rest ? ` ${String(rest).padStart(2, '0')}` : ''}`;
+}
+
+// ---------------------------------------------------------------------------
+// Doublons : une tâche ajoutée à la main qui est déjà l'action du CRM
+// ---------------------------------------------------------------------------
+
+/** Mots trop courants pour reconnaître un lead (« Atelier », « Architecture »…). */
+const GENERIC_WORDS = new Set([
+  'atelier',
+  'architecture',
+  'architectures',
+  'architecte',
+  'architectes',
+  'cabinet',
+  'agence',
+  'studio',
+  'design',
+  'designer',
+  'interior',
+  'interieur',
+  'project',
+  'projects',
+  'maison',
+  'bureau',
+  'conseil',
+  'renovation',
+]);
+
+function words(text: string): string[] {
+  return stripAccents(text)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/** Les mots qui désignent un lead : prénom, nom, nom du cabinet. */
+export function leadTokens(lead: Lead): string[] {
+  const all = words(`${lead.nom ?? ''} ${lead.cabinet ?? ''}`);
+  return [...new Set(all.filter((w) => w.length >= 4 && !GENERIC_WORDS.has(w)))];
+}
+
+function minutesOf(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+const MEETING_WORDS =
+  /\b(rdv|rendez|r1|r2|r3|visio|reunion|appel|appeler|rappeler|call|tel|telephone|meet)\b/;
+const OTHER_ACTION_WORDS =
+  /\b(envoyer|envoi|preparer|prepa|preparation|mail|mails|doc|docs|document|documents|devis|facture|relancer)\b/;
+
+/**
+ * Une tâche écrite à la main est-elle déjà cette action du CRM ? Même jour
+ * (à vérifier par l'appelant), même lead (son nom ou son cabinet dans le
+ * texte), et :
+ *  - même heure, à 15 min près ;
+ *  - ou, une heure manquant d'un côté : deux rendez-vous (« rdv », « visio »,
+ *    « appel »… mais pas « envoyer le doc du R2 »), ou deux préparations.
+ * Deux heures différentes : deux moments distincts, on garde les deux.
+ */
+export function duplicatesCrm(
+  manual: { label: string; time: string | null },
+  crm: { time: string | null; match?: CrmMatch },
+): boolean {
+  if (!crm.match) return false;
+  const plain = words(manual.label);
+  if (!crm.match.names.some((n) => plain.includes(n))) return false;
+  const manualTime = manual.time ?? parseTime(manual.label);
+  if (manualTime && crm.time) return Math.abs(minutesOf(manualTime) - minutesOf(crm.time)) <= 15;
+  const text = plain.join(' ');
+  if (crm.match.prep) return /\bprepa/.test(text);
+  return crm.match.meeting && MEETING_WORDS.test(text) && !OTHER_ACTION_WORDS.test(text);
 }

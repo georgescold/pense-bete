@@ -1,9 +1,10 @@
 import type { EssortPerson } from '../config';
+import type { CrmMatch } from '../essort/planner';
 import { supabase } from './supabase';
 
 export interface BoardExtras {
   /** Actions Airtable des 6 jours suivants (planning de la semaine). */
-  upcoming?: { date: string; time: string | null; label: string }[];
+  upcoming?: { date: string; time: string | null; label: string; match?: CrmMatch }[];
   /** Dernière lecture d'Airtable en échec : la liste est incomplète. */
   airtableError?: boolean;
 }

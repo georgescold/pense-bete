@@ -31,6 +31,7 @@ import {
   addDays,
   buildAgenda,
   compareTime,
+  duplicatesCrm,
   padDate,
   pingPlan,
   untilText,
@@ -142,8 +143,12 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
   const history = await listAirtableTasksFor(plan.due.map((d) => d.recordId));
   const keep = new Set<number>();
   let position = nextPosition(tasks);
+  // Ce que la personne a déjà écrit elle-même pour ce jour l'emporte : l'action
+  // du CRM n'est pas ajoutée en double (et une copie déjà là s'efface).
+  const manual = tasks.filter((t) => t.source === 'manual' && !t.dismissed_at);
 
   for (const due of plan.due) {
+    if (manual.some((m) => duplicatesCrm({ label: m.label, time: m.due_time }, due))) continue;
     const onBoard = tasks.filter((t) => t.source === 'airtable' && t.record_id === due.recordId);
 
     const same = onBoard.find((t) => t.signature === due.signature);
@@ -290,10 +295,20 @@ async function upsertMessage(
 async function weekItems(board: EssortBoardRow): Promise<{ items: WeekItem[]; planned: number }> {
   const from = addDays(board.board_date, 1);
   const to = addDays(board.board_date, WEEK_DAYS);
-  const items: WeekItem[] = (board.extras?.upcoming ?? []).map((u) => ({ ...u, kind: 'airtable' }));
-
   // Toutes les tâches planifiées à venir : le menu « Retirer » va au-delà de la semaine.
   const planned = await listPlannedTasks(board.person, from, '9999-12-31');
+  // Une action du CRM déjà planifiée à la main ce jour-là n'apparaît qu'une fois.
+  const items: WeekItem[] = (board.extras?.upcoming ?? [])
+    .filter(
+      (u) =>
+        !planned.some(
+          (t) =>
+            t.source === 'manual' &&
+            t.essort_boards.board_date === u.date &&
+            duplicatesCrm({ label: t.label, time: t.due_time }, u),
+        ),
+    )
+    .map((u) => ({ date: u.date, time: u.time, label: u.label, kind: 'airtable' as const }));
   for (const t of planned) {
     const date = t.essort_boards.board_date;
     if (date <= to) items.push({ date, time: t.due_time, label: t.label, kind: 'planned' });
@@ -472,7 +487,20 @@ export async function syncFromCrm(client: Client): Promise<void> {
       });
 
       // Au premier passage après un démarrage, rien à comparer : on retient.
-      const changes = previous ? changedActions(previous.actions, plan.actions) : [];
+      // Ce qui est déjà au planning (écrit à la main) n'est pas annoncé.
+      const written = previous
+        ? (await listPlannedTasks(m.person, date, '9999-12-31')).filter(
+            (t) => t.source === 'manual',
+          )
+        : [];
+      const changes = (previous ? changedActions(previous.actions, plan.actions) : []).filter(
+        (a) =>
+          !written.some(
+            (t) =>
+              t.essort_boards.board_date === a.date &&
+              duplicatesCrm({ label: t.label, time: t.due_time }, a),
+          ),
+      );
       lastSeen.set(m.person, {
         fingerprint,
         actions: new Map(plan.actions.map((a) => [a.key, a])),
@@ -542,6 +570,12 @@ export async function planTask(
     });
   });
   await withBoardLock(todayBoard.id, async () => {
+    if (isToday) {
+      // Si la tâche écrite est déjà une action du CRM du jour, l'action en
+      // double s'efface du tableau.
+      const agenda = await readAgenda(todayBoard.board_date, [0]);
+      if (agenda) await reconcile((await getBoardById(todayBoard.id)) ?? todayBoard, agenda);
+    }
     await renderBoard(client, todayBoard.id, { week: !isToday, day: isToday });
     if (isToday) await schedulePings(client, todayBoard.id);
   });
