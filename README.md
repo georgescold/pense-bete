@@ -172,7 +172,12 @@ s'il parle du même jour. Un texte à plusieurs dates n'est lu que pour la date 
 texte qui ne raconte que le passé est ignoré. Si *Action* décrit un état (« Attente de doc »,
 « A relancer ») et que le texte dit quoi faire (« appel », « rappeler », « R2 »), c'est le texte
 qui nomme la tâche. Un rendez-vous « doc à préparer » amène « Préparer le R2 » le jour ouvré
-d'avant. Le libellé dépend de l'*Action* (a call, R1, R2, à
+d'avant.
+
+**Pas de doublon** : une tâche écrite à la main l'emporte sur l'action du CRM qui dit la même
+chose (même jour, nom du lead ou de son cabinet dans le texte, et même heure à 15 min près, ou deux
+rendez-vous « rdv / visio / appel » dont l'un n'a pas d'heure). L'action du CRM n'est alors ni
+ajoutée, ni montrée dans la semaine, ni annoncée, et ne sonne pas. Le libellé dépend de l'*Action* (a call, R1, R2, à
 relancer…), les leads `dead` sont ignorés. Bot redémarré après 6h (ou 19h) : ce qui manque est publié au
 démarrage, les pings du jour sont reprogrammés.
 

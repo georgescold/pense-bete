@@ -459,13 +459,21 @@ describe('buildAgenda', () => {
   });
 
   it('met les 6 jours suivants dans la semaine, avec l’heure', () => {
-    expect(agenda.people.Enzo.upcoming).toEqual([
+    const simple = (items: { date: string; time: string | null; label: string }[]) =>
+      items.map(({ date, time, label }) => ({ date, time, label }));
+    expect(simple(agenda.people.Enzo.upcoming)).toEqual([
       { date: '2026-10-09', time: '14:00', label: 'R1 avec Dina' },
       { date: '2026-10-13', time: null, label: 'R2 avec Elie' },
     ]);
-    expect(agenda.people.Loys.upcoming).toEqual([
+    expect(simple(agenda.people.Loys.upcoming)).toEqual([
       { date: '2026-10-08', time: null, label: 'Appeler Fanny' },
     ]);
+    // Chaque action garde de quoi la reconnaître dans le planning écrit à la main.
+    expect(agenda.people.Enzo.upcoming[0]!.match).toEqual({
+      names: ['dina'],
+      meeting: true,
+      prep: false,
+    });
   });
 
   it('ignore les leads morts, sans date ou sans responsable', () => {
