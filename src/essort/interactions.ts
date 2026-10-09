@@ -10,7 +10,10 @@ import { logger } from '../logger';
 import { getBoardById, listPlannedTasks, listTasks } from '../db/essortRepository';
 import { addDays, parseTimeInput } from './planner';
 import {
+  carryOver,
+  declineCarryOver,
   essortToday,
+  openTaskIds,
   planTask,
   refreshBoard,
   removeTasks,
@@ -217,6 +220,39 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
     case 'refresh': {
       await (interaction as ButtonInteraction).deferUpdate();
       await refreshBoard(interaction.client, board);
+      return;
+    }
+
+    // --- Question de 19h ----------------------------------------------------
+
+    case 'carry':
+    case 'carryall': {
+      const ids =
+        parsed.action === 'carry'
+          ? (interaction as StringSelectMenuInteraction).values.map(Number).filter(Number.isFinite)
+          : await openTaskIds(board);
+      await (interaction as ButtonInteraction | StringSelectMenuInteraction).update({
+        content: 'Report en cours…',
+        embeds: [],
+        components: [],
+      });
+      const carried = await carryOver(interaction.client, board, ids);
+      await (interaction as ButtonInteraction | StringSelectMenuInteraction).editReply({
+        content:
+          carried.length > 0
+            ? `Reporté à demain par ${doneBy} : ${carried.map((l) => `**${l}**`).join(', ')}`
+            : 'Rien à reporter : ces tâches sont déjà faites ou retirées.',
+      });
+      return;
+    }
+
+    case 'carrynone': {
+      await declineCarryOver(board);
+      await (interaction as ButtonInteraction).update({
+        content: `Rien n’a été reporté (${doneBy}) : les tâches restent sur aujourd’hui.`,
+        embeds: [],
+        components: [],
+      });
       return;
     }
 

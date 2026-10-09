@@ -17,6 +17,9 @@ export interface EssortBoardRow {
   message_id: string | null;
   /** Message de la semaine, posté juste avant celui du jour. */
   week_message_id: string | null;
+  /** Question de 19h « Reporter à demain ? », et le moment où on y a répondu. */
+  evening_message_id: string | null;
+  evening_answered_at: string | null;
   extras: BoardExtras;
   read_at: string | null;
   archived_at: string | null;
@@ -47,7 +50,16 @@ export interface EssortTaskRow {
 }
 
 export type BoardPatch = Partial<
-  Pick<EssortBoardRow, 'message_id' | 'week_message_id' | 'extras' | 'read_at' | 'archived_at'>
+  Pick<
+    EssortBoardRow,
+    | 'message_id'
+    | 'week_message_id'
+    | 'evening_message_id'
+    | 'evening_answered_at'
+    | 'extras'
+    | 'read_at'
+    | 'archived_at'
+  >
 >;
 export type TaskPatch = Partial<
   Pick<
@@ -192,16 +204,18 @@ export async function deleteTask(id: number): Promise<void> {
   if (error) throw new Error(`deleteTask: ${error.message}`);
 }
 
-/** Actions Airtable déjà validées ou retirées pour ces leads, tous jours confondus. */
-export async function listHandledAirtableTasks(recordIds: string[]): Promise<EssortTaskRow[]> {
+/**
+ * Toutes les tâches Airtable déjà créées pour ces leads, tous jours et tous
+ * états confondus : faites, retirées, ou laissées sans report sur leur jour.
+ */
+export async function listAirtableTasksFor(recordIds: string[]): Promise<EssortTaskRow[]> {
   if (recordIds.length === 0) return [];
   const { data, error } = await supabase
     .from(TASKS)
     .select()
     .eq('source', 'airtable')
-    .or('is_done.eq.true,dismissed_at.not.is.null')
     .in('record_id', recordIds);
-  if (error) throw new Error(`listHandledAirtableTasks: ${error.message}`);
+  if (error) throw new Error(`listAirtableTasksFor: ${error.message}`);
   return (data ?? []) as EssortTaskRow[];
 }
 
@@ -209,28 +223,7 @@ export type TaskWithBoard = EssortTaskRow & {
   essort_boards: Pick<EssortBoardRow, 'person' | 'board_date'>;
 };
 
-/** Tâches restées ouvertes sur les tableaux des jours précédents. */
-export async function listOpenTasksBefore(
-  person: EssortPerson,
-  date: string,
-): Promise<TaskWithBoard[]> {
-  const { data, error } = await supabase
-    .from(TASKS)
-    .select('*, essort_boards!inner(person, board_date)')
-    .eq('is_done', false)
-    .is('dismissed_at', null)
-    .eq('essort_boards.person', person)
-    .lt('essort_boards.board_date', date);
-  if (error) throw new Error(`listOpenTasksBefore: ${error.message}`);
-  return ((data ?? []) as TaskWithBoard[]).sort(
-    (a, b) =>
-      a.essort_boards.board_date.localeCompare(b.essort_boards.board_date) ||
-      a.position - b.position ||
-      a.id - b.id,
-  );
-}
-
-/** Rattache des tâches à un autre tableau (même ligne, nouvelle place). */
+/** Rattache une tâche à un autre tableau (même ligne, nouvelle place). */
 export async function moveTask(id: number, boardId: number, position: number): Promise<void> {
   const { error } = await supabase.from(TASKS).update({ board_id: boardId, position }).eq('id', id);
   if (error) throw new Error(`moveTask: ${error.message}`);
@@ -249,7 +242,10 @@ export async function listTasksToSync(): Promise<TaskWithBoard[]> {
   return (data ?? []) as TaskWithBoard[];
 }
 
-/** Tâches planifiées à la main sur des jours à venir (bornes incluses). */
+/**
+ * Tâches posées sur des jours à venir (bornes incluses) : planifiées à la
+ * main, ou reportées depuis le soir.
+ */
 export async function listPlannedTasks(
   person: EssortPerson,
   from: string,
@@ -258,7 +254,6 @@ export async function listPlannedTasks(
   const { data, error } = await supabase
     .from(TASKS)
     .select('*, essort_boards!inner(person, board_date)')
-    .eq('source', 'manual')
     .is('dismissed_at', null)
     .eq('essort_boards.person', person)
     .gte('essort_boards.board_date', from)

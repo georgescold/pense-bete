@@ -4,12 +4,19 @@ import { config, essortMembers } from '../config';
 import { logger } from '../logger';
 import { hasFiredToday, withRetries } from '../daily/jobs';
 import { onRemindersChanged } from '../lib/reminderEvents';
-import { publishBoards, refreshForUser, restoreTodayPings, syncDoneTasks } from './service';
+import {
+  askCarryOver,
+  publishBoards,
+  refreshForUser,
+  restoreTodayPings,
+  syncDoneTasks,
+} from './service';
 
 /**
  * Tous les jours à 6h (heure de Paris), dans le salon de chaque personne : le
  * planning de la semaine puis le message du jour. Relecture d'Airtable à 12h
- * et 17h : les mêmes messages sont mis à jour.
+ * et 17h : les mêmes messages sont mis à jour. À 19h, s'il reste des tâches,
+ * le bot demande lesquelles reporter au lendemain (rien n'est reporté seul).
  *
  * Le rendez-vous passe aussi par la base Supabase chaque matin : il la garde
  * éveillée, alors qu'elle se mettait en pause faute d'activité.
@@ -18,6 +25,7 @@ export function startEssortJobs(client: Client): void {
   for (const [expr, label] of [
     [config.ESSORT_CRON, 'ESSORT_CRON'],
     [config.ESSORT_REFRESH_CRON, 'ESSORT_REFRESH_CRON'],
+    [config.ESSORT_EVENING_CRON, 'ESSORT_EVENING_CRON'],
   ] as const) {
     if (!cron.validate(expr)) {
       logger.error({ expr, label }, 'expression cron invalide, tableaux Essort non planifies');
@@ -43,10 +51,19 @@ export function startEssortJobs(client: Client): void {
     { timezone: config.TIMEZONE },
   );
 
+  cron.schedule(
+    config.ESSORT_EVENING_CRON,
+    () => {
+      void withRetries('question du soir', () => askCarryOver(client));
+    },
+    { timezone: config.TIMEZONE },
+  );
+
   logger.info(
     {
       cron: config.ESSORT_CRON,
       refresh: config.ESSORT_REFRESH_CRON,
+      evening: config.ESSORT_EVENING_CRON,
       tz: config.TIMEZONE,
       people: essortMembers.map((m) => m.person),
     },
@@ -59,6 +76,10 @@ export function startEssortJobs(client: Client): void {
   // messages du jour suivent aussitôt.
   if (hasFiredToday(config.ESSORT_CRON)) {
     void withRetries('rattrapage Essort', () => publishBoards(client));
+  }
+  // Idem pour la question du soir : posée une seule fois par jour.
+  if (hasFiredToday(config.ESSORT_EVENING_CRON)) {
+    void withRetries('rattrapage question du soir', () => askCarryOver(client));
   }
   // Les minuteurs des pings ne survivent pas à un redémarrage.
   void withRetries('pings du jour', () => restoreTodayPings(client));
