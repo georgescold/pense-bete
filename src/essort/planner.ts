@@ -654,3 +654,42 @@ export function weekdayName(date: string, short = false): string {
     timeZone: 'UTC',
   });
 }
+
+// ---------------------------------------------------------------------------
+// Pings avant une tâche à heure fixe
+// ---------------------------------------------------------------------------
+
+/** Une tâche à heure fixe sonne 1 h, 30 min puis 10 min avant. */
+export const PING_OFFSETS_MIN = [60, 30, 10] as const;
+
+/**
+ * Les pings à programmer pour une tâche qui commence à `start` (ms) et en a
+ * déjà reçu `sent` : chacun avec son attente. Ceux dont l'heure est passée
+ * (redémarrage du bot, tâche ajoutée tard) ne partent pas tous d'un coup :
+ * seul le plus récent part tout de suite, si la tâche n'a pas commencé.
+ */
+export function pingPlan(
+  start: number,
+  sent: number,
+  now: number,
+): { index: number; delay: number }[] {
+  const plan: { index: number; delay: number }[] = [];
+  let catchUp: number | null = null;
+  PING_OFFSETS_MIN.forEach((offset, index) => {
+    if (index < sent) return;
+    const at = start - offset * 60_000;
+    if (at > now) plan.push({ index, delay: at - now });
+    else catchUp = index;
+  });
+  if (catchUp !== null && start > now) plan.unshift({ index: catchUp, delay: 0 });
+  return plan;
+}
+
+/** « dans 1 h », « dans 30 min », « dans 1 h 05 », « maintenant ». */
+export function untilText(start: number, now: number): string {
+  const minutes = Math.round((start - now) / 60_000);
+  if (minutes <= 0) return 'maintenant';
+  if (minutes < 60) return `dans ${minutes} min`;
+  const rest = minutes % 60;
+  return `dans ${Math.floor(minutes / 60)} h${rest ? ` ${String(rest).padStart(2, '0')}` : ''}`;
+}

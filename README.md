@@ -161,7 +161,9 @@ consigne (« Prochain événement ») et le téléphone. Les rappels du jour son
   reporter ». Sans réponse, rien ne bouge : les tâches restent affichées sur leur
   jour, non faites. Une action Airtable non reportée ne revient que si sa date ou son action
   changent dans Airtable.
-- Une tâche à heure fixe déclenche un ping à l'heure dite : « ⏰ 11:00 · Appeler… ».
+- Une tâche à heure fixe (rendez-vous du CRM, tâche ajoutée avec une heure) déclenche trois pings :
+  1 h, 30 min et 10 min avant (« ⏰ 14:00 (dans 30 min) · R2 avec… »). Après un redémarrage ou un
+  ajout tardif, un seul ping rattrape ceux qui sont passés, avec le temps qui reste.
 
 Lecture d'Airtable : la personne est *Gestion* (vide : le prénom de l'équipe cité dans le texte).
 La date est *date de la prochaine action*, à défaut la première date à venir écrite dans

@@ -38,7 +38,8 @@ export interface EssortTaskRow {
   details: string | null;
   /** 'HH:MM', heure de Paris : ping à l'heure dite. */
   due_time: string | null;
-  pinged_at: string | null;
+  /** Pings déjà envoyés avant l'heure (1 h, 30 min, 10 min) : 0 à 3. */
+  pings_sent: number;
   position: number;
   is_done: boolean;
   done_at: string | null;
@@ -69,7 +70,7 @@ export type TaskPatch = Partial<
     | 'label'
     | 'details'
     | 'due_time'
-    | 'pinged_at'
+    | 'pings_sent'
     | 'signature'
     | 'position'
     | 'is_done'
@@ -237,7 +238,7 @@ export async function moveTask(
 ): Promise<void> {
   const { error } = await supabase
     .from(TASKS)
-    .update({ board_id: boardId, position, carried_from: carriedFrom, pinged_at: null })
+    .update({ board_id: boardId, position, carried_from: carriedFrom, pings_sent: 0 })
     .eq('id', id);
   if (error) throw new Error(`moveTask: ${error.message}`);
 }
