@@ -11,7 +11,7 @@ import {
 } from 'discord.js';
 import type { EssortBoardRow, EssortTaskRow, TaskWithBoard } from '../db/essortRepository';
 import { truncate } from '../lib/format';
-import { addDays, compareTime, shortDate, WEEK_DAYS, weekdayName } from './planner';
+import { addDays, compareTime, shortDate, WEEK_DAYS, weekdayName, type CrmAction } from './planner';
 
 /**
  * Deux messages par personne et par jour, dans cet ordre :
@@ -493,4 +493,28 @@ export function eveningSummary(carried: string[], answered: boolean): string {
   return answered
     ? 'Rien n’a été reporté : les tâches restent sur aujourd’hui.'
     : 'Sans réponse : rien n’a été reporté.';
+}
+
+// ---------------------------------------------------------------------------
+// Ce que le bot a compris d'une mise à jour du CRM
+// ---------------------------------------------------------------------------
+
+/**
+ * Une ligne par action ajoutée ou déplacée dans le CRM : le jour, l'heure et
+ * la tâche telles que le bot les a comprises. Rien à cocher ici : la tâche
+ * arrive dans le message du jour le moment venu.
+ */
+export function crmUpdateMessage(changes: CrmAction[], today: string): string {
+  const lines = changes.map((a) => {
+    const when =
+      a.date < today
+        ? `En retard (prévu le ${shortDate(a.date)})`
+        : a.date === today
+          ? 'Aujourd’hui'
+          : a.date === addDays(today, 1)
+            ? 'Demain'
+            : dayLabel(a.date);
+    return `- ${when} · ${timed(a.time, a.label)}`;
+  });
+  return truncate(`Agenda mis à jour depuis le CRM :\n${lines.join('\n')}`, 1900);
 }

@@ -64,7 +64,7 @@ npm run dev               # tsx watch
 | `AIRTABLE_TOKEN` | (Essort) token Airtable en **lecture seule** (`data.records:read`) |
 | `AIRTABLE_BASE_ID` / `AIRTABLE_LEADS_TABLE` | (Essort) par défaut la base et la table « Leads » d'Essort |
 | `ESSORT_CRON` | (Essort) par défaut `0 6 * * *` (6h, heure de Paris) |
-| `ESSORT_REFRESH_CRON` | (Essort) relectures d'Airtable, par défaut `0 12,17 * * *` (12h et 17h) |
+| `ESSORT_SYNC_CRON` | (Essort) synchro avec le CRM, par défaut `*/5 * * * *` (toutes les 5 minutes) |
 | `ESSORT_EVENING_CRON` | (Essort) question « reporter à demain ? », par défaut `0 19 * * *` (19h) |
 | `ESSORT_LOYS_CHANNEL_ID` / `ESSORT_ENZO_CHANNEL_ID` | (Essort) salon de chaque tableau ; sans salon, pas de tableau |
 | `ESSORT_LOYS_USER_ID` / `ESSORT_ENZO_USER_ID` | (Essort) pour mentionner la personne et réserver les boutons à l'équipe |
@@ -137,7 +137,9 @@ concernés (ils se redéclenchent d'eux-mêmes).
 
 Chaque jour à 6h, le bot lit la table « Leads » d'Airtable (**sans jamais y écrire**) et poste
 deux messages dans le salon de chaque personne (champ **Gestion** : Loys ou Enzo). Il relit
-Airtable à 12h et 17h et met ces messages à jour, sans nouvelle mention.
+Airtable toutes les 5 minutes : dès qu'une action change dans le CRM (après un rendez-vous client,
+notamment), les messages sont mis à jour sans nouvelle mention et le bot écrit en une ligne ce
+qu'il a compris (« Agenda mis à jour depuis le CRM : - Mardi 13/10 · `14:00` R2 avec … »).
 
 **📅 Ta semaine** — les 6 jours suivants (pas aujourd'hui) : actions Airtable, tâches planifiées,
 rappels, chacun à son heure.
@@ -161,9 +163,14 @@ consigne (« Prochain événement ») et le téléphone. Les rappels du jour son
   changent dans Airtable.
 - Une tâche à heure fixe déclenche un ping à l'heure dite : « ⏰ 11:00 · Appeler… ».
 
-Lecture d'Airtable : la date est *date de la prochaine action*, à défaut celle écrite dans
-*Prochain événement* (« jeudi 08/10 », « fin octobre »…) ; l'heure vient de *Prochain événement*
-(« à 11h ») si ce texte parle du même jour. Le libellé dépend de l'*Action* (a call, R1, R2, à
+Lecture d'Airtable : la personne est *Gestion* (vide : le prénom de l'équipe cité dans le texte).
+La date est *date de la prochaine action*, à défaut la première date à venir écrite dans
+*Prochain événement* (« jeudi 08/10 », « fin octobre »…) ; l'heure vient de ce texte (« à 11h »)
+s'il parle du même jour. Un texte à plusieurs dates n'est lu que pour la date de l'action ; un
+texte qui ne raconte que le passé est ignoré. Si *Action* décrit un état (« Attente de doc »,
+« A relancer ») et que le texte dit quoi faire (« appel », « rappeler », « R2 »), c'est le texte
+qui nomme la tâche. Un rendez-vous « doc à préparer » amène « Préparer le R2 » le jour ouvré
+d'avant. Le libellé dépend de l'*Action* (a call, R1, R2, à
 relancer…), les leads `dead` sont ignorés. Bot redémarré après 6h (ou 19h) : ce qui manque est publié au
 démarrage, les pings du jour sont reprogrammés.
 

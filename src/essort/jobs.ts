@@ -10,12 +10,14 @@ import {
   refreshForUser,
   restoreTodayPings,
   syncDoneTasks,
+  syncFromCrm,
 } from './service';
 
 /**
  * Tous les jours à 6h (heure de Paris), dans le salon de chaque personne : le
- * planning de la semaine puis le message du jour. Relecture d'Airtable à 12h
- * et 17h : les mêmes messages sont mis à jour. À 19h, s'il reste des tâches,
+ * planning de la semaine puis le message du jour. Airtable est relu toutes les
+ * 5 minutes : un changement dans le CRM met à jour ces messages et le bot dit
+ * ce qu'il a compris. À 19h, s'il reste des tâches,
  * le bot demande lesquelles reporter au lendemain (rien n'est reporté seul).
  *
  * Le rendez-vous passe aussi par la base Supabase chaque matin : il la garde
@@ -24,7 +26,7 @@ import {
 export function startEssortJobs(client: Client): void {
   for (const [expr, label] of [
     [config.ESSORT_CRON, 'ESSORT_CRON'],
-    [config.ESSORT_REFRESH_CRON, 'ESSORT_REFRESH_CRON'],
+    [config.ESSORT_SYNC_CRON, 'ESSORT_SYNC_CRON'],
     [config.ESSORT_EVENING_CRON, 'ESSORT_EVENING_CRON'],
   ] as const) {
     if (!cron.validate(expr)) {
@@ -41,12 +43,11 @@ export function startEssortJobs(client: Client): void {
     { timezone: config.TIMEZONE },
   );
 
-  // Même opération que le matin : elle met à jour les messages déjà postés et
-  // ne publie que ce qui manquerait (6h raté).
+  // Pas de nouvel essai : la prochaine synchro est dans 5 minutes.
   cron.schedule(
-    config.ESSORT_REFRESH_CRON,
+    config.ESSORT_SYNC_CRON,
     () => {
-      void withRetries('relecture Airtable', () => publishBoards(client));
+      void syncFromCrm(client).catch((err) => logger.error({ err }, 'synchro CRM en echec'));
     },
     { timezone: config.TIMEZONE },
   );
@@ -62,7 +63,7 @@ export function startEssortJobs(client: Client): void {
   logger.info(
     {
       cron: config.ESSORT_CRON,
-      refresh: config.ESSORT_REFRESH_CRON,
+      sync: config.ESSORT_SYNC_CRON,
       evening: config.ESSORT_EVENING_CRON,
       tz: config.TIMEZONE,
       people: essortMembers.map((m) => m.person),

@@ -27,11 +27,20 @@ import { parisDateValue, zonedWallClockToUtc } from '../lib/datetime';
 import { expandOccurrences } from '../lib/embeds';
 import { appendRowsTo, clearRange, isSheetsConfigured } from '../lib/sheets';
 import { fetchLeads, recordUrl } from './airtable';
-import { addDays, buildAgenda, compareTime, padDate, WEEK_DAYS, type Agenda } from './planner';
+import {
+  addDays,
+  buildAgenda,
+  compareTime,
+  padDate,
+  WEEK_DAYS,
+  type Agenda,
+  type CrmAction,
+} from './planner';
 import {
   buildDayComponents,
   buildDayEmbed,
   buildEveningMessage,
+  crmUpdateMessage,
   eveningSummary,
   type EveningItem,
   buildWeekComponents,
@@ -403,6 +412,78 @@ export async function publishBoards(client: Client): Promise<void> {
   void syncDoneTasks();
   // Remonter l'échec permet au rattrapage de réessayer (base en train de revenir…).
   if (failures.length > 0) throw failures[0];
+}
+
+// ---------------------------------------------------------------------------
+// Synchro continue avec le CRM
+// ---------------------------------------------------------------------------
+
+/** Dernier agenda lu par personne : ce qui a changé depuis mérite d'être dit. */
+const lastSeen = new Map<EssortPerson, { fingerprint: string; actions: Map<string, CrmAction> }>();
+
+/** Actions nouvelles, ou dont le jour, l'heure ou l'intitulé ont changé. */
+export function changedActions(previous: Map<string, CrmAction>, next: CrmAction[]): CrmAction[] {
+  return next.filter((a) => {
+    const before = previous.get(a.key);
+    return !before || before.date !== a.date || before.time !== a.time || before.label !== a.label;
+  });
+}
+
+/**
+ * Relit Airtable toutes les quelques minutes. Pour chaque personne dont
+ * l'agenda a changé et dont le tableau du jour est déjà publié : met à jour
+ * ses deux messages (sans mention) et dit en une ligne ce que le bot a compris
+ * des actions ajoutées ou déplacées. Avant 6h, rien n'est publié : le tableau
+ * du jour sera construit à l'heure, avec ces changements.
+ */
+export async function syncFromCrm(client: Client): Promise<void> {
+  const date = essortToday();
+  const agenda = await readAgenda(date, [0]);
+  // Airtable injoignable : la prochaine synchro réessaiera.
+  if (!agenda) return;
+
+  for (const m of essortMembers) {
+    try {
+      const plan = agenda.people[m.person];
+      const fingerprint = JSON.stringify(plan);
+      const previous = lastSeen.get(m.person);
+      if (previous?.fingerprint === fingerprint) continue;
+
+      const board = await getBoard(m.person, date);
+      if (!board?.message_id || board.archived_at) continue;
+      await withBoardLock(board.id, async () => {
+        await reconcile((await getBoardById(board.id)) ?? board, agenda);
+        await renderBoard(client, board.id);
+        await schedulePings(client, board.id);
+        // Une question du soir encore ouverte suit aussi : une tâche du jour
+        // arrivée du CRM après 19h doit pouvoir être reportée.
+        const fresh = await getBoardById(board.id);
+        if (fresh?.evening_message_id && !fresh.evening_answered_at) {
+          await renderEvening(client, fresh);
+        }
+      });
+
+      // Au premier passage après un démarrage, rien à comparer : on retient.
+      const changes = previous ? changedActions(previous.actions, plan.actions) : [];
+      lastSeen.set(m.person, {
+        fingerprint,
+        actions: new Map(plan.actions.map((a) => [a.key, a])),
+      });
+      if (changes.length > 0) {
+        const channel = await fetchChannel(client, board.channel_id);
+        await channel?.send({
+          content: crmUpdateMessage(changes, date),
+          allowedMentions: { parse: [] },
+        });
+        logger.info(
+          { person: m.person, changes: changes.length },
+          'agenda mis a jour depuis le CRM',
+        );
+      }
+    } catch (err) {
+      logger.error({ err, person: m.person }, 'synchro CRM en echec');
+    }
+  }
 }
 
 /** Un rappel créé, modifié ou supprimé : le jour et la semaine de la personne suivent. */
