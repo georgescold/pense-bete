@@ -10,6 +10,7 @@ import {
   getTask,
   listBoardsToArchive,
   listAirtableTasksFor,
+  listCarriedFrom,
   listPlannedTasks,
   listTasks,
   listTasksToSync,
@@ -26,11 +27,13 @@ import { parisDateValue, zonedWallClockToUtc } from '../lib/datetime';
 import { expandOccurrences } from '../lib/embeds';
 import { appendRowsTo, clearRange, isSheetsConfigured } from '../lib/sheets';
 import { fetchLeads, recordUrl } from './airtable';
-import { addDays, buildAgenda, padDate, WEEK_DAYS, type Agenda } from './planner';
+import { addDays, buildAgenda, compareTime, padDate, WEEK_DAYS, type Agenda } from './planner';
 import {
   buildDayComponents,
   buildDayEmbed,
   buildEveningMessage,
+  eveningSummary,
+  type EveningItem,
   buildWeekComponents,
   buildWeekEmbed,
   dayIntro,
@@ -341,9 +344,7 @@ async function archivePastBoards(
   for (const old of await listBoardsToArchive(person, date)) {
     await updateBoard(old.id, { archived_at: new Date().toISOString() });
     if (old.message_id || old.week_message_id) await renderBoard(client, old.id);
-    if (old.evening_message_id && !old.evening_answered_at) {
-      await closeEveningQuestion(client, old, 'Sans réponse : rien n’a été reporté.');
-    }
+    if (old.evening_message_id && !old.evening_answered_at) await finishEvening(client, old, null);
   }
 }
 
@@ -545,9 +546,42 @@ export function toggleTasks(
 // ---------------------------------------------------------------------------
 
 /**
+ * Les tâches de la question du soir : celles encore ouvertes sur le jour, et
+ * celles déjà reportées ce soir (pour pouvoir annuler). Ordre stable : un
+ * report ne doit pas renuméroter les boutons.
+ */
+async function eveningItems(board: EssortBoardRow): Promise<EveningItem[]> {
+  const open = (await listTasks(board.id)).filter((t) => !t.is_done);
+  const carried = (await listCarriedFrom(board.id)).filter(
+    (t) => t.board_id !== board.id && !t.is_done,
+  );
+  return [
+    ...open.map((task) => ({ task, carried: false })),
+    ...carried.map((task) => ({ task, carried: true })),
+  ].sort((a, b) => compareTime(a.task.due_time, b.task.due_time) || a.task.id - b.task.id);
+}
+
+/** Publie la question (avec mention) ou la met à jour (sans nouvelle mention). */
+async function renderEvening(client: Client, board: EssortBoardRow): Promise<void> {
+  const items = await eveningItems(board);
+  if (items.length === 0 && !board.evening_message_id) return;
+  const channel = await fetchChannel(client, board.channel_id);
+  if (!channel) return;
+  const userId = memberOf(board.person)?.userId ?? null;
+  const id = await upsertMessage(
+    channel,
+    board.evening_message_id,
+    buildEveningMessage(board, items, userId ? userMention(userId) : null),
+    userId ? [userId] : [],
+    !board.archived_at,
+  );
+  if (id !== board.evening_message_id) await updateBoard(board.id, { evening_message_id: id });
+}
+
+/**
  * Pour chaque personne qui a encore des tâches non faites, demande lesquelles
- * passer au lendemain. Une seule question par jour, même après un
- * redémarrage ; rien à demander si tout est fait.
+ * passer au lendemain. Une seule question par jour ; après un redémarrage, une
+ * question encore ouverte est simplement remise à jour.
  */
 export async function askCarryOver(client: Client): Promise<void> {
   const date = essortToday();
@@ -555,20 +589,12 @@ export async function askCarryOver(client: Client): Promise<void> {
   for (const m of essortMembers) {
     try {
       const board = await getBoard(m.person, date);
-      if (!board || board.archived_at || board.evening_message_id) continue;
+      if (!board || board.archived_at || board.evening_answered_at) continue;
       await withBoardLock(board.id, async () => {
-        const open = dayOrder(await listTasks(board.id)).filter((t) => !t.is_done);
-        if (open.length === 0) return;
-        const channel = await fetchChannel(client, board.channel_id);
-        if (!channel) return;
-        const userId = m.userId;
-        const sent = await channel.send({
-          ...buildEveningMessage(board, open, userId ? userMention(userId) : null),
-          allowedMentions: { users: userId ? [userId] : [] },
-        });
-        await updateBoard(board.id, { evening_message_id: sent.id });
-        logger.info({ person: m.person, open: open.length }, 'question du soir posee');
+        const fresh = (await getBoardById(board.id)) ?? board;
+        await renderEvening(client, fresh);
       });
+      logger.info({ person: m.person }, 'question du soir posee');
     } catch (err) {
       logger.error({ err, person: m.person }, 'question du soir non posee');
       failures.push(err);
@@ -578,59 +604,75 @@ export async function askCarryOver(client: Client): Promise<void> {
 }
 
 /**
- * Passe les tâches choisies sur le tableau du lendemain (la même ligne, qui
- * sonnera de nouveau à son heure) et renvoie leurs libellés. Les autres
- * restent sur le jour, non faites.
+ * Un clic sur une tâche de la question du soir : encore sur le jour, elle
+ * passe sur le tableau du lendemain (la même ligne, qui sonnera de nouveau à
+ * son heure) ; déjà reportée, elle revient sur le jour.
  */
-export function carryOver(
+export function toggleCarry(
   client: Client,
   board: EssortBoardRow,
   taskIds: number[],
-): Promise<string[]> {
+): Promise<void> {
   return withBoardLock(board.id, async () => {
-    const tomorrow = addDays(board.board_date, 1);
-    const { board: target } = await ensureBoard(board.person, tomorrow, board.channel_id);
-    let position = nextPosition(await listTasks(target.id, true));
-    const carried: string[] = [];
+    const { board: tomorrow } = await ensureBoard(
+      board.person,
+      addDays(board.board_date, 1),
+      board.channel_id,
+    );
     for (const id of taskIds) {
       const task = await getTask(id);
-      if (!task || task.board_id !== board.id || task.is_done || task.dismissed_at) continue;
-      await moveTask(task.id, target.id, position++);
-      if (task.pinged_at) await updateTask(task.id, { pinged_at: null });
-      carried.push(task.label);
+      if (!task || task.is_done || task.dismissed_at) continue;
+      if (task.board_id === board.id) {
+        const position = nextPosition(await listTasks(tomorrow.id, true));
+        await moveTask(task.id, tomorrow.id, position, board.id);
+      } else if (task.carried_from === board.id && task.board_id === tomorrow.id) {
+        const position = nextPosition(await listTasks(board.id, true));
+        await moveTask(task.id, board.id, position, null);
+      }
     }
-    await updateBoard(board.id, { evening_answered_at: new Date().toISOString() });
-    // Le jour perd les tâches reportées, la semaine les montre demain.
-    if (carried.length > 0) await renderBoard(client, board.id);
-    logger.info({ person: board.person, carried }, 'taches reportees au lendemain');
-    return carried;
+    // Le jour perd ou retrouve la tâche, la semaine la montre demain.
+    await renderBoard(client, board.id);
+    await renderEvening(client, (await getBoardById(board.id)) ?? board);
   });
 }
 
-/** Tâches encore ouvertes du tableau, pour « Tout reporter ». */
-export async function openTaskIds(board: EssortBoardRow): Promise<number[]> {
-  return (await listTasks(board.id)).filter((t) => !t.is_done).map((t) => t.id);
+/** « Tout reporter » : toutes les tâches encore sur le jour passent à demain. */
+export async function carryAll(client: Client, board: EssortBoardRow, by: string): Promise<void> {
+  const open = (await listTasks(board.id)).filter((t) => !t.is_done).map((t) => t.id);
+  await toggleCarry(client, board, open);
+  await finishEvening(client, board, by);
 }
 
-/** « Ne rien reporter » : la question est close, les tâches restent sur le jour. */
-export async function declineCarryOver(board: EssortBoardRow): Promise<void> {
-  await updateBoard(board.id, { evening_answered_at: new Date().toISOString() });
-  logger.info({ person: board.person }, 'rien reporte au lendemain');
-}
-
-async function closeEveningQuestion(
+/**
+ * Clôt la question : le message ne garde que ce qui a été reporté.
+ * @param by qui a répondu, ou null si personne (clôture du matin).
+ */
+export async function finishEvening(
   client: Client,
   board: EssortBoardRow,
-  text: string,
+  by: string | null,
 ): Promise<void> {
+  const carried = (await listCarriedFrom(board.id)).filter((t) => t.board_id !== board.id);
+  if (by) await updateBoard(board.id, { evening_answered_at: new Date().toISOString() });
   const channel = await fetchChannel(client, board.channel_id);
-  if (!channel || !board.evening_message_id) return;
-  try {
-    const msg = await channel.messages.fetch(board.evening_message_id);
-    await msg.edit({ content: text, embeds: [], components: [], allowedMentions: { parse: [] } });
-  } catch (err) {
-    logger.warn({ err, id: board.id }, 'question du soir non close');
+  if (channel && board.evening_message_id) {
+    const summary = eveningSummary(
+      carried.map((t) => t.label),
+      by !== null,
+    );
+    try {
+      const msg = await channel.messages.fetch(board.evening_message_id);
+      await msg.edit({
+        content: by ? `${summary} (${by})` : summary,
+        embeds: [],
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+    } catch (err) {
+      logger.warn({ err, id: board.id }, 'question du soir non close');
+    }
   }
+  logger.info({ person: board.person, carried: carried.length, by }, 'question du soir close');
 }
 
 // ---------------------------------------------------------------------------

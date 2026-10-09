@@ -154,8 +154,9 @@ consigne (« Prochain événement ») et le téléphone. Les rappels du jour son
 - **➕ Ajouter** (heure facultative), **🗑️ Retirer** n'importe quelle tâche. Une tâche Airtable
   retirée ou validée ne revient pas tant que sa date ou son action ne changent pas dans Airtable.
 - **Rien n'est reporté automatiquement.** À 19h, s'il reste des tâches non faites, le bot
-  tague la personne et demande lesquelles passer au lendemain (menu, « Tout reporter » ou
-  « Ne rien reporter »). Sans réponse, rien ne bouge : les tâches restent affichées sur leur
+  tague la personne et demande lesquelles passer au lendemain : un bouton numéroté par tâche
+  (un clic la reporte, un second annule, autant qu'on veut), puis « Terminé », ou « Tout
+  reporter ». Sans réponse, rien ne bouge : les tâches restent affichées sur leur
   jour, non faites. Une action Airtable non reportée ne revient que si sa date ou son action
   changent dans Airtable.
 - Une tâche à heure fixe déclenche un ping à l'heure dite : « ⏰ 11:00 · Appeler… ».

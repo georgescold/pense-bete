@@ -399,56 +399,98 @@ export interface EveningMessage {
   components: Row[];
 }
 
+/** Une tâche de la question du soir : encore sur le jour, ou déjà reportée. */
+export interface EveningItem {
+  task: EssortTaskRow;
+  carried: boolean;
+}
+
 /**
- * Les tâches non faites du jour, à choisir dans un menu, ou tout / rien d'un
- * clic. Rien n'est reporté sans réponse : elles restent sur le jour.
+ * Les tâches non faites du jour, une par bouton numéroté : un clic la reporte
+ * à demain, un second annule. On en reporte autant qu'on veut, puis
+ * « Terminé ». Rien n'est reporté sans clic : elles restent sur le jour.
  */
 export function buildEveningMessage(
   board: EssortBoardRow,
-  open: EssortTaskRow[],
+  items: EveningItem[],
   mention: string | null,
 ): EveningMessage {
-  const options = open.slice(0, MAX_OPTIONS);
-  const count = open.length === 1 ? 'Il reste 1 tâche' : `Il reste ${open.length} tâches`;
+  const count = items.length === 1 ? 'Il reste 1 tâche' : `Il reste ${items.length} tâches`;
+  const lines = items.map(
+    ({ task, carried }, i) =>
+      `**${i + 1}.** ${timed(task.due_time, task.label)}${carried ? ' → **demain**' : ''}`,
+  );
+
+  const rows: Row[] = [];
+  // Comme le message du jour : 20 boutons au plus, le reste dans un menu.
+  const overflow = items.length > MAX_TASK_BUTTONS;
+  const withButtons = items.slice(0, overflow ? BUTTONS_BEFORE_SELECT : MAX_TASK_BUTTONS);
+  for (let i = 0; i < withButtons.length; i += BUTTONS_PER_ROW) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        withButtons.slice(i, i + BUTTONS_PER_ROW).map(({ task, carried }, j) =>
+          new ButtonBuilder()
+            .setCustomId(`essort:carrytoggle:${board.id}:${task.id}`)
+            .setLabel(carried ? `${i + j + 1} → demain` : String(i + j + 1))
+            .setStyle(carried ? ButtonStyle.Success : ButtonStyle.Secondary),
+        ),
+      ) as Row,
+    );
+  }
+  if (overflow) {
+    const rest = items.slice(BUTTONS_BEFORE_SELECT, BUTTONS_BEFORE_SELECT + MAX_OPTIONS);
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`essort:carry:${board.id}`)
+          .setPlaceholder(`Reporter ou annuler ${BUTTONS_BEFORE_SELECT + 1}+…`)
+          .setMinValues(1)
+          .setMaxValues(rest.length)
+          .addOptions(
+            rest.map(({ task, carried }, i) =>
+              new StringSelectMenuOptionBuilder()
+                .setValue(String(task.id))
+                .setLabel(
+                  truncate(
+                    `${BUTTONS_BEFORE_SELECT + i + 1}. ${withTime(task.due_time, task.label)}${carried ? ' → demain' : ''}`,
+                    100,
+                  ),
+                ),
+            ),
+          ),
+      ) as Row,
+    );
+  }
+  rows.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`essort:carryall:${board.id}`)
+        .setLabel('Tout reporter')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`essort:carrydone:${board.id}`)
+        .setLabel('Terminé')
+        .setStyle(ButtonStyle.Success),
+    ) as Row,
+  );
+
   return {
     content: `${mention ? `${mention} ` : ''}${count} aujourd’hui. Lesquelles reporter à demain ?`,
     embeds: [
       new EmbedBuilder()
         .setColor(COLOR_WEEK)
         .setTitle(`🌙 Ce soir · ${dayLabel(board.board_date)}`)
-        .setDescription(
-          truncate(
-            open.map((t, i) => `**${i + 1}.** ${timed(t.due_time, t.label)}`).join('\n'),
-            LIST_BUDGET,
-          ),
-        )
-        .setFooter({ text: 'Sans réponse, rien n’est reporté.' }),
+        .setDescription(truncate(lines.join('\n'), LIST_BUDGET))
+        .setFooter({ text: 'Un clic sur un numéro le reporte, un second annule.' }),
     ],
-    components: [
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`essort:carry:${board.id}`)
-          .setPlaceholder('Choisir les tâches à reporter…')
-          .setMinValues(1)
-          .setMaxValues(options.length)
-          .addOptions(
-            options.map((t, i) =>
-              new StringSelectMenuOptionBuilder()
-                .setValue(String(t.id))
-                .setLabel(truncate(`${i + 1}. ${withTime(t.due_time, t.label)}`, 100)),
-            ),
-          ),
-      ) as Row,
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`essort:carryall:${board.id}`)
-          .setLabel('Tout reporter')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`essort:carrynone:${board.id}`)
-          .setLabel('Ne rien reporter')
-          .setStyle(ButtonStyle.Secondary),
-      ) as Row,
-    ],
+    components: rows,
   };
+}
+
+/** Ce qui reste de la question une fois close. */
+export function eveningSummary(carried: string[], answered: boolean): string {
+  if (carried.length > 0) return `Reporté à demain : ${carried.map((l) => `**${l}**`).join(', ')}`;
+  return answered
+    ? 'Rien n’a été reporté : les tâches restent sur aujourd’hui.'
+    : 'Sans réponse : rien n’a été reporté.';
 }

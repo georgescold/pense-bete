@@ -4,6 +4,7 @@ import {
   buildDayComponents,
   buildDayEmbed,
   buildEveningMessage,
+  eveningSummary,
   buildPlanDayMenu,
   buildWeekComponents,
   buildWeekEmbed,
@@ -182,25 +183,41 @@ describe('parseTimeInput', () => {
 });
 
 describe('question du soir', () => {
-  it('tague la personne et propose de choisir, tout ou rien reporter', () => {
-    const open = [
-      task(1, { label: 'Appeler Paul', due_time: '11:00' }),
-      task(2, { label: 'Devis' }),
+  type Button = { label: string; custom_id: string; style: number };
+
+  it('un bouton par tâche, la reportée en vert, puis tout reporter ou terminé', () => {
+    const items = [
+      { task: task(1, { label: 'Appeler Paul', due_time: '11:00' }), carried: false },
+      { task: task(2, { label: 'Devis' }), carried: true },
+      { task: task(3, { label: 'Mail' }), carried: false },
     ];
-    const msg = buildEveningMessage(board(), open, '<@1>');
-    expect(msg.content).toBe('<@1> Il reste 2 tâches aujourd’hui. Lesquelles reporter à demain ?');
-    expect(msg.embeds[0]!.toJSON().description).toBe('**1.** `11:00` Appeler Paul\n**2.** Devis');
-    const [select, buttons] = msg.components.map((r) => r.toJSON());
-    const menu = select!.components[0] as {
-      custom_id: string;
-      max_values: number;
-      options: unknown[];
-    };
-    expect(menu.custom_id).toBe('essort:carry:1');
-    expect(menu.max_values).toBe(2);
-    expect((buttons!.components as { label: string }[]).map((b) => b.label)).toEqual([
-      'Tout reporter',
-      'Ne rien reporter',
+    const msg = buildEveningMessage(board(), items, '<@1>');
+    expect(msg.content).toBe('<@1> Il reste 3 tâches aujourd’hui. Lesquelles reporter à demain ?');
+    expect(msg.embeds[0]!.toJSON().description).toBe(
+      '**1.** `11:00` Appeler Paul\n**2.** Devis → **demain**\n**3.** Mail',
+    );
+    const [tasksRow, actions] = msg.components.map((r) => r.toJSON());
+    expect((tasksRow!.components as Button[]).map((b) => [b.label, b.custom_id, b.style])).toEqual([
+      ['1', 'essort:carrytoggle:1:1', 2],
+      ['2 → demain', 'essort:carrytoggle:1:2', 3],
+      ['3', 'essort:carrytoggle:1:3', 2],
     ]);
+    expect((actions!.components as Button[]).map((b) => b.label)).toEqual([
+      'Tout reporter',
+      'Terminé',
+    ]);
+  });
+
+  it('tient dans les 5 lignes de Discord au-delà de 20 tâches', () => {
+    const items = Array.from({ length: 30 }, (_, i) => ({ task: task(i + 1), carried: false }));
+    expect(buildEveningMessage(board(), items, null).components.length).toBeLessThanOrEqual(5);
+  });
+
+  it('résume ce qui a été reporté à la clôture', () => {
+    expect(eveningSummary(['A', 'B'], true)).toBe('Reporté à demain : **A**, **B**');
+    expect(eveningSummary([], true)).toBe(
+      'Rien n’a été reporté : les tâches restent sur aujourd’hui.',
+    );
+    expect(eveningSummary([], false)).toBe('Sans réponse : rien n’a été reporté.');
   });
 });
