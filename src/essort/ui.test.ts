@@ -94,6 +94,17 @@ describe('message du jour', () => {
     expect(json.description).toContain('~~1. Fait~~');
   });
 
+  it('garde visibles les tâches reportées à demain, sans bouton', () => {
+    const json = buildDayEmbed(
+      board(),
+      [task(1, { label: 'Devis', is_done: true })],
+      [],
+      [task(2, { label: 'Envoyer doc R2', due_time: null })],
+    ).toJSON();
+    expect(json.fields).toEqual([{ name: 'Reporté à demain', value: '- Envoyer doc R2' }]);
+    expect(json.description).not.toContain('Envoyer doc R2');
+  });
+
   it('liste les rappels du jour à part', () => {
     const json = buildDayEmbed(board(), [], [{ time: '09:00', label: 'Sport' }]).toJSON();
     expect(json.fields).toEqual([{ name: '⏰ Rappels', value: '- `09:00` Sport' }]);
@@ -194,7 +205,8 @@ describe('question du soir', () => {
       { task: task(3, { label: 'Mail' }), carried: false },
     ];
     const msg = buildEveningMessage(board(), items, '<@1>');
-    expect(msg.content).toBe('<@1> Il reste 3 tâches aujourd’hui. Lesquelles reporter à demain ?');
+    // La tâche déjà reportée ne compte plus dans ce qui reste.
+    expect(msg.content).toBe('<@1> Il reste 2 tâches aujourd’hui. Lesquelles reporter à demain ?');
     expect(msg.embeds[0]!.toJSON().description).toBe(
       '**1.** `11:00` Appeler Paul\n**2.** Devis → **demain**\n**3.** Mail',
     );
@@ -213,6 +225,11 @@ describe('question du soir', () => {
   it('tient dans les 5 lignes de Discord au-delà de 20 tâches', () => {
     const items = Array.from({ length: 30 }, (_, i) => ({ task: task(i + 1), carried: false }));
     expect(buildEveningMessage(board(), items, null).components.length).toBeLessThanOrEqual(5);
+  });
+
+  it('tout reporté ou fait : le dit au lieu de compter', () => {
+    const msg = buildEveningMessage(board(), [{ task: task(1), carried: true }], '<@1>');
+    expect(msg.content).toBe('<@1> Tout le reste est fait ou reporté à demain.');
   });
 
   it('résume ce qui a été reporté à la clôture', () => {
