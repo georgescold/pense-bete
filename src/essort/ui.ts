@@ -123,11 +123,14 @@ export interface TimedLine {
 /**
  * @param tasks déjà dans l'ordre de `dayOrder`.
  * @param reminders rappels du jour (ils se déclenchent seuls, rien à cocher ici).
+ * @param carried tâches reportées au lendemain depuis ce jour : elles ne sont
+ * plus à cocher ici, mais restent visibles pour qu'on sache où elles sont.
  */
 export function buildDayEmbed(
   board: EssortBoardRow,
   tasks: EssortTaskRow[],
   reminders: TimedLine[] = [],
+  carried: EssortTaskRow[] = [],
 ): EmbedBuilder {
   const done = tasks.filter((t) => t.is_done).length;
   const archived = Boolean(board.archived_at);
@@ -142,6 +145,15 @@ export function buildDayEmbed(
         : `${progressBar(done, tasks.length)}\n​\n${taskLines(tasks)}`,
     );
 
+  if (carried.length > 0) {
+    embed.addFields({
+      name: archived ? 'Reporté au lendemain' : 'Reporté à demain',
+      value: truncate(
+        carried.map((t) => `- ${timed(t.due_time, t.label)}`).join('\n'),
+        FIELD_BUDGET,
+      ),
+    });
+  }
   if (reminders.length > 0) {
     embed.addFields({
       name: '⏰ Rappels',
@@ -427,7 +439,7 @@ export function buildEveningMessage(
   items: EveningItem[],
   mention: string | null,
 ): EveningMessage {
-  const count = items.length === 1 ? 'Il reste 1 tâche' : `Il reste ${items.length} tâches`;
+  const open = items.filter((i) => !i.carried).length;
   const lines = items.map(
     ({ task, carried }, i) =>
       `**${i + 1}.** ${timed(task.due_time, task.label)}${carried ? ' → **demain**' : ''}`,
@@ -487,7 +499,11 @@ export function buildEveningMessage(
   );
 
   return {
-    content: `${mention ? `${mention} ` : ''}${count} aujourd’hui. Lesquelles reporter à demain ?`,
+    content: `${mention ? `${mention} ` : ''}${
+      open === 0
+        ? 'Tout le reste est fait ou reporté à demain.'
+        : `Il reste ${open === 1 ? '1 tâche' : `${open} tâches`} aujourd’hui. Lesquelles reporter à demain ?`
+    }`,
     embeds: [
       new EmbedBuilder()
         .setColor(COLOR_WEEK)

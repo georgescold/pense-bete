@@ -350,12 +350,15 @@ export async function renderBoard(
     const tasks = dayOrder(await listTasks(board.id));
     const remaining = tasks.filter((t) => !t.is_done).length;
     const reminders = await reminderLines(userId, board.board_date, board.board_date);
+    const carried = (await listCarriedFrom(board.id)).filter(
+      (t) => t.board_id !== board.id && !t.is_done,
+    );
     const id = await upsertMessage(
       channel,
       board.message_id,
       {
         content: live ? dayIntro(userId ? userMention(userId) : null, remaining, tasks.length) : '',
-        embeds: [buildDayEmbed(board, tasks, reminders)],
+        embeds: [buildDayEmbed(board, tasks, reminders, carried)],
         components: buildDayComponents(board, tasks),
       },
       userId ? [userId] : [],
@@ -580,6 +583,7 @@ export async function planTask(
     }
     await renderBoard(client, todayBoard.id, { week: !isToday, day: isToday });
     if (isToday) await schedulePings(client, todayBoard.id);
+    if (isToday) await refreshEveningIfOpen(client, todayBoard.id);
   });
   logger.info({ person: todayBoard.person, date, time, label }, 'tache Essort planifiee');
 }
@@ -621,6 +625,7 @@ export function editTask(
     // Le jour et la semaine peuvent changer tous les deux (déplacement).
     await renderBoard(client, todayBoard.id);
     await schedulePings(client, todayBoard.id);
+    await refreshEveningIfOpen(client, todayBoard.id);
     logger.info({ person: todayBoard.person, taskId, ...change }, 'tache Essort modifiee');
     return change.label;
   });
@@ -658,7 +663,10 @@ export function removeTasks(
       await dismissTask(task);
       removed.push(task.label);
     }
-    if (removed.length > 0) await renderBoard(client, board.id, { week: false });
+    if (removed.length > 0) {
+      await renderBoard(client, board.id, { week: false });
+      await refreshEveningIfOpen(client, board.id);
+    }
     return removed;
   });
 }
@@ -704,6 +712,7 @@ export function toggleTasks(
       if (!done) void removeFromSheet(task.id);
     }
     await renderBoard(client, board.id, { week: false });
+    await refreshEveningIfOpen(client, board.id);
     void syncDoneTasks();
   });
 }
@@ -735,14 +744,30 @@ async function renderEvening(client: Client, board: EssortBoardRow): Promise<voi
   const channel = await fetchChannel(client, board.channel_id);
   if (!channel) return;
   const userId = memberOf(board.person)?.userId ?? null;
+  // Tout a été coché après la question : plus rien à reporter.
+  const payload =
+    items.length === 0
+      ? { content: 'Tout est fait aujourd’hui. ✅', embeds: [], components: [] }
+      : buildEveningMessage(board, items, userId ? userMention(userId) : null);
   const id = await upsertMessage(
     channel,
     board.evening_message_id,
-    buildEveningMessage(board, items, userId ? userMention(userId) : null),
+    payload,
     userId ? [userId] : [],
-    !board.archived_at,
+    !board.archived_at && items.length > 0,
   );
   if (id !== board.evening_message_id) await updateBoard(board.id, { evening_message_id: id });
+}
+
+/**
+ * La question du soir suit le tableau : une tâche cochée, ajoutée, modifiée ou
+ * retirée après 19h y apparaît ou en disparaît aussitôt.
+ */
+async function refreshEveningIfOpen(client: Client, boardId: number): Promise<void> {
+  const board = await getBoardById(boardId);
+  if (board?.evening_message_id && !board.evening_answered_at && !board.archived_at) {
+    await renderEvening(client, board);
+  }
 }
 
 /**

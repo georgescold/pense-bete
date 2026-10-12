@@ -162,7 +162,9 @@ consigne (« Prochain événement ») et le téléphone. Les rappels du jour son
 - **Rien n'est reporté automatiquement.** À 19h, s'il reste des tâches non faites, le bot
   tague la personne et demande lesquelles passer au lendemain : un bouton numéroté par tâche
   (un clic la reporte, un second annule, autant qu'on veut), puis « Terminé », ou « Tout
-  reporter ». Sans réponse, rien ne bouge : les tâches restent affichées sur leur
+  reporter ». La question suit le tableau : une tâche cochée après 19h en disparaît, et une tâche
+  reportée reste visible dans le message du jour sous « Reporté à demain ». Sans réponse, rien ne
+  bouge : les tâches restent affichées sur leur
   jour, non faites. Une action Airtable non reportée ne revient que si sa date ou son action
   changent dans Airtable.
 - Une tâche à heure fixe (rendez-vous du CRM, tâche ajoutée avec une heure) déclenche trois pings :
