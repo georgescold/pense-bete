@@ -26,7 +26,9 @@ import { formatPlanDate } from '../daily/ui';
 import { parisDateValue, zonedWallClockToUtc } from '../lib/datetime';
 import { expandOccurrences } from '../lib/embeds';
 import { appendRowsTo, clearRange, isSheetsConfigured } from '../lib/sheets';
+import { isCalendarConfigured } from '../lib/calendar';
 import { fetchLeads, recordUrl } from './airtable';
+import { followInCalendar } from './calendarSync';
 import {
   addDays,
   buildAgenda,
@@ -100,11 +102,16 @@ function withBoardLock<T>(boardId: number, fn: () => Promise<T>): Promise<T> {
 /** 3 essais sur ~40 s ; sur un clic, un seul : la personne attend. */
 const SCHEDULED_READ_DELAYS = [0, 10_000, 30_000];
 
+/** Dernière lecture réussie du CRM pour aujourd'hui : l'agenda Google s'en sert après un clic. */
+let lastAgenda: { date: string; agenda: Agenda } | null = null;
+
 async function readAgenda(date: string, delays: number[]): Promise<Agenda | null> {
   for (const [attempt, delay] of delays.entries()) {
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     try {
-      return buildAgenda(await fetchLeads(), date);
+      const agenda = buildAgenda(await fetchLeads(), date);
+      if (date === essortToday()) lastAgenda = { date, agenda };
+      return agenda;
     } catch (err) {
       logger.warn({ err, attempt }, 'lecture Airtable impossible');
     }
@@ -438,6 +445,7 @@ export async function publishBoards(client: Client): Promise<void> {
     }
   }
   void syncDoneTasks();
+  if (agenda) void followInCalendar(agenda, date);
   // Remonter l'échec permet au rattrapage de réessayer (base en train de revenir…).
   if (failures.length > 0) throw failures[0];
 }
@@ -525,6 +533,9 @@ export async function syncFromCrm(client: Client): Promise<void> {
       logger.error({ err, person: m.person }, 'synchro CRM en echec');
     }
   }
+  // À chaque relecture, même sans changement : l'agenda se répare tout seul
+  // (événement effacé à la main, écriture précédente en échec).
+  void followInCalendar(agenda, date);
 }
 
 /** Un rappel créé, modifié ou supprimé : le jour et la semaine de la personne suivent. */
@@ -540,12 +551,26 @@ export async function refreshForUser(client: Client, userId: string): Promise<vo
 // Actions depuis Discord
 // ---------------------------------------------------------------------------
 
+/**
+ * Après un changement depuis Discord, l'agenda Google suit aussitôt, avec la
+ * dernière lecture du CRM (5 minutes au plus). Ne bloque pas le clic.
+ */
+function calendarFollows(): void {
+  if (!isCalendarConfigured()) return;
+  const today = essortToday();
+  void (async () => {
+    const agenda = lastAgenda?.date === today ? lastAgenda.agenda : await readAgenda(today, [0]);
+    if (agenda) await followInCalendar(agenda, today);
+  })().catch((err) => logger.error({ err }, 'synchro agenda Google en echec'));
+}
+
 export function refreshBoard(client: Client, board: EssortBoardRow): Promise<void> {
   return withBoardLock(board.id, async () => {
     const fresh = (await getBoardById(board.id)) ?? board;
     await reconcile(fresh, await readAgenda(fresh.board_date, [0]));
     await renderBoard(client, board.id);
     await schedulePings(client, board.id);
+    calendarFollows();
   });
 }
 
@@ -585,6 +610,7 @@ export async function planTask(
     if (isToday) await schedulePings(client, todayBoard.id);
     if (isToday) await refreshEveningIfOpen(client, todayBoard.id);
   });
+  calendarFollows();
   logger.info({ person: todayBoard.person, date, time, label }, 'tache Essort planifiee');
 }
 
@@ -626,6 +652,7 @@ export function editTask(
     await renderBoard(client, todayBoard.id);
     await schedulePings(client, todayBoard.id);
     await refreshEveningIfOpen(client, todayBoard.id);
+    calendarFollows();
     logger.info({ person: todayBoard.person, taskId, ...change }, 'tache Essort modifiee');
     return change.label;
   });
@@ -666,6 +693,7 @@ export function removeTasks(
     if (removed.length > 0) {
       await renderBoard(client, board.id, { week: false });
       await refreshEveningIfOpen(client, board.id);
+      calendarFollows();
     }
     return removed;
   });
@@ -688,7 +716,10 @@ export function unplanTasks(
       await dismissTask(task);
       removed.push(task.label);
     }
-    if (removed.length > 0) await renderBoard(client, todayBoard.id, { day: false });
+    if (removed.length > 0) {
+      await renderBoard(client, todayBoard.id, { day: false });
+      calendarFollows();
+    }
     return removed;
   });
 }
@@ -825,6 +856,7 @@ export function toggleCarry(
     // Le jour perd ou retrouve la tâche, la semaine la montre demain.
     await renderBoard(client, board.id);
     await renderEvening(client, (await getBoardById(board.id)) ?? board);
+    calendarFollows();
   });
 }
 
