@@ -551,6 +551,8 @@ export interface CrmAction {
   time: string | null;
   label: string;
   match: CrmMatch;
+  /** La consigne et le téléphone, comme sous la tâche du jour. */
+  details?: string;
 }
 
 export interface PersonAgenda {
@@ -621,6 +623,7 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
         time: step.time,
         label: step.label,
         match,
+        details: taskDetails(lead, step, today),
       });
       const delta = daysBetween(today, step.date);
       if (delta <= 0) {
@@ -748,10 +751,14 @@ function words(text: string): string[] {
     .filter(Boolean);
 }
 
+/** Les mots d'un texte assez distinctifs pour reconnaître un lead (4 lettres et plus). */
+export function significantWords(text: string): string[] {
+  return [...new Set(words(text).filter((w) => w.length >= 4 && !GENERIC_WORDS.has(w)))];
+}
+
 /** Les mots qui désignent un lead : prénom, nom, nom du cabinet. */
 export function leadTokens(lead: Lead): string[] {
-  const all = words(`${lead.nom ?? ''} ${lead.cabinet ?? ''}`);
-  return [...new Set(all.filter((w) => w.length >= 4 && !GENERIC_WORDS.has(w)))];
+  return significantWords(`${lead.nom ?? ''} ${lead.cabinet ?? ''}`);
 }
 
 function minutesOf(time: string): number {
@@ -763,6 +770,12 @@ const MEETING_WORDS =
   /\b(rdv|rendez|r1|r2|r3|visio|reunion|appel|appeler|rappeler|call|tel|telephone|meet)\b/;
 const OTHER_ACTION_WORDS =
   /\b(envoyer|envoi|preparer|prepa|preparation|mail|mails|doc|docs|document|documents|devis|facture|relancer)\b/;
+
+/** Un texte qui parle d'un rendez-vous (« rdv », « visio », « appel »…), pas d'une autre action. */
+export function looksLikeMeeting(label: string): boolean {
+  const text = words(label).join(' ');
+  return MEETING_WORDS.test(text) && !OTHER_ACTION_WORDS.test(text);
+}
 
 /**
  * Une tâche écrite à la main est-elle déjà cette action du CRM ? Même jour
@@ -782,9 +795,8 @@ export function duplicatesCrm(
   if (!crm.match.names.some((n) => plain.includes(n))) return false;
   const manualTime = manual.time ?? parseTime(manual.label);
   if (manualTime && crm.time) return Math.abs(minutesOf(manualTime) - minutesOf(crm.time)) <= 15;
-  const text = plain.join(' ');
-  if (crm.match.prep) return /\bprepa/.test(text);
-  return crm.match.meeting && MEETING_WORDS.test(text) && !OTHER_ACTION_WORDS.test(text);
+  if (crm.match.prep) return /\bprepa/.test(plain.join(' '));
+  return crm.match.meeting && looksLikeMeeting(manual.label);
 }
 
 const WEEKDAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];

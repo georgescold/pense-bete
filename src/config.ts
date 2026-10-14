@@ -47,6 +47,17 @@ const schema = z.object({
   ESSORT_LOYS_USER_ID: z.string().optional(),
   ESSORT_ENZO_CHANNEL_ID: z.string().optional(),
   ESSORT_ENZO_USER_ID: z.string().optional(),
+
+  // --- Essort : l'agenda Google suit les rendez-vous à heure fixe ---
+  // ID de l'agenda (pour l'agenda principal d'un compte : son adresse). Vide :
+  // le bot n'écrit dans aucun agenda.
+  GOOGLE_CALENDAR_ID: z.string().optional(),
+  // Clé JSON (brute ou base64) du compte de service avec qui l'agenda est
+  // partagé (« Apporter des modifications aux événements ») ; à défaut, celle
+  // du Sheet.
+  GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON: z.string().optional(),
+  // Durée d'un rendez-vous dans l'agenda, en minutes.
+  ESSORT_EVENT_MINUTES: z.coerce.number().int().min(5).max(480).default(60),
 });
 
 export type AppConfig = z.infer<typeof schema>;
@@ -110,5 +121,5 @@ console.log(
       : config.AIRTABLE_TOKEN
         ? 'aucun salon'
         : 'pas de token Airtable'
-  }`,
+  } agenda=${config.GOOGLE_CALENDAR_ID ? config.GOOGLE_CALENDAR_ID : 'non configuré'}`,
 );

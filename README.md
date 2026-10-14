@@ -68,6 +68,9 @@ npm run dev               # tsx watch
 | `ESSORT_EVENING_CRON` | (Essort) question « reporter à demain ? », par défaut `0 19 * * *` (19h) |
 | `ESSORT_LOYS_CHANNEL_ID` / `ESSORT_ENZO_CHANNEL_ID` | (Essort) salon de chaque tableau ; sans salon, pas de tableau |
 | `ESSORT_LOYS_USER_ID` / `ESSORT_ENZO_USER_ID` | (Essort) pour mentionner la personne et réserver les boutons à l'équipe |
+| `GOOGLE_CALENDAR_ID` | (Essort) agenda Google tenu à jour par le bot ; pour l'agenda principal d'un compte, son adresse. Vide : aucun agenda |
+| `GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON` | (Essort) clé JSON (brute ou base64) du compte de service avec qui l'agenda est partagé ; à défaut, `GOOGLE_SERVICE_ACCOUNT_JSON` |
+| `ESSORT_EVENT_MINUTES` | (Essort) durée d'un rendez-vous dans l'agenda, par défaut `60` |
 
 ## Commandes
 
@@ -187,6 +190,32 @@ ajoutée, ni montrée dans la semaine, ni annoncée, et ne sonne pas. Le libell�
 relancer…), les leads `dead` sont ignorés. Bot redémarré après 6h (ou 19h) : ce qui manque est publié au
 démarrage, les pings du jour sont reprogrammés.
 
+### Agenda Google
+
+Si `GOOGLE_CALENDAR_ID` est défini, l'agenda Google suit le planning : chaque rendez-vous **à heure
+fixe** (action du CRM qui a une heure, tâche posée sur Discord avec une heure) y devient un
+événement d'une heure, « R2 avec … · Enzo », avec la consigne, le téléphone et la fiche Airtable en
+description. Un **rendez-vous client sans heure** (appel, R1, R2 du CRM, tâche Discord « rdv … ») attend
+dans le bandeau « toute la journée » de son jour (« … · heure à fixer ») et passe sur son créneau dès
+que l'heure est écrite ; les préparations, relances et envois de documents sans heure n'y vont pas.
+Un changement sur Discord passe aussitôt ; un changement dans Airtable, à la relecture
+suivante (5 minutes au plus). Une tâche retirée sur Discord, une action déplacée ou passée à `dead`
+dans Airtable : l'événement est déplacé ou supprimé.
+
+- **Sens unique** : ce qui est changé dans l'agenda ne remonte ni dans Airtable ni sur Discord, et
+  la relecture suivante remet l'événement du bot comme le dit le CRM. On modifie dans Airtable ou sur
+  Discord.
+- Le bot ne touche **qu'à ses événements** (clé privée `essortKey`), d'aujourd'hui à 90 jours : les
+  jours passés et les événements écrits à la main ne sont jamais modifiés.
+- **Pas de doublon** : un rendez-vous déjà écrit à la main dans l'agenda (même créneau à 15 min près,
+  nom du lead ou de son cabinet dans le titre ; le même jour pour un rendez-vous sans heure) l'emporte ; le bot n'en crée pas un second, et retire
+  le sien s'il l'avait créé avant.
+- Les rappels `/rappel` n'y vont pas.
+
+Mise en place : activer l'API Google Calendar dans le projet Google Cloud du compte de service, puis
+partager l'agenda avec l'adresse du compte (Paramètres de l'agenda → Partager avec des personnes
+spécifiques → « Apporter des modifications aux événements »).
+
 ## Tests
 
 ```bash
@@ -214,6 +243,7 @@ src/
 │   └── trigger.ts        # Envoi du rappel + update next_run_at
 ├── essort/
 │   ├── airtable.ts       # Lecture seule du CRM (GET uniquement)
+│   ├── calendarSync.ts   # Rendez-vous à heure fixe → agenda Google (sens unique)
 │   ├── planner.ts        # Leads → tâches du jour et de la semaine, dates et heures (pur)
 │   ├── service.ts        # Messages semaine + jour, synchro Airtable, pings, Sheet
 │   ├── ui.ts             # Embeds, boutons, menus
@@ -224,7 +254,9 @@ src/
 │   ├── repository.ts     # CRUD typé
 │   └── essortRepository.ts
 ├── lib/
+│   ├── calendar.ts       # Client Google Agenda (compte de service)
 │   ├── embeds.ts         # Builders Discord embeds
+│   ├── googleAuth.ts     # Jeton Google d'un compte de service (Sheet, agenda)
 │   └── format.ts         # Format date FR
 └── scripts/
     └── deploy-commands.ts
