@@ -147,7 +147,10 @@ qu'il a compris (« Agenda mis à jour depuis le CRM : - Mardi 13/10 · `14:00` 
 **📅 Ta semaine** — les 6 jours suivants (pas aujourd'hui) : actions Airtable, tâches planifiées,
 rappels, chacun à son heure.
 - **➕ Planifier** : un jour (d'aujourd'hui à J+24), une tâche, une heure facultative.
-- **✏️ Modifier** : une tâche posée sur un jour à venir (texte, jour, heure), formulaire prérempli.
+- **✏️ Modifier** : une tâche posée sur un jour à venir, ou une action du CRM de la semaine (pour
+  lui ajouter une heure, la changer de jour…) : texte, jour, heure, formulaire prérempli. L'action
+  du CRM devient alors une tâche de son jour, gardée telle quelle tant que le CRM ne change pas son
+  action ou sa date.
 - **🗑️ Retirer** : une tâche planifiée sur un jour à venir.
 - **⏰ Rappels** : la liste de ses rappels ; ➕ en créer un (même formulaire que `/rappel ajouter`),
   ou en choisir un pour le mettre en pause, le réactiver ou le supprimer.

@@ -303,7 +303,15 @@ export function buildWeekEmbed(board: EssortBoardRow, items: WeekItem[]): EmbedB
     .setDescription(truncate(blocks.join('\n\n'), 4000));
 }
 
-export function buildWeekComponents(board: EssortBoardRow, plannedCount: number): Row[] {
+/**
+ * @param plannedCount tâches posées sur les jours à venir (« Retirer »)
+ * @param editableCount celles-ci plus les actions du CRM à venir (« Modifier »)
+ */
+export function buildWeekComponents(
+  board: EssortBoardRow,
+  plannedCount: number,
+  editableCount = plannedCount,
+): Row[] {
   if (board.archived_at) return [];
   return [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -317,7 +325,7 @@ export function buildWeekComponents(board: EssortBoardRow, plannedCount: number)
         .setLabel('Modifier')
         .setEmoji('✏️')
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(plannedCount === 0),
+        .setDisabled(editableCount === 0),
       new ButtonBuilder()
         .setCustomId(`essort:unplan:${board.id}`)
         .setLabel('Retirer')
@@ -551,10 +559,14 @@ export function crmUpdateMessage(changes: CrmAction[], today: string): string {
 // Modifier une tâche
 // ---------------------------------------------------------------------------
 
-/** Une tâche modifiable et son jour. */
+/**
+ * Une tâche modifiable et son jour. `crmKey` : une action du CRM des jours à
+ * venir, pas encore au planning ; elle le devient au moment de la modifier.
+ */
 export interface EditableTask {
-  task: EssortTaskRow;
+  task: Pick<EssortTaskRow, 'id' | 'label' | 'due_time'>;
   date: string;
+  crmKey?: string;
 }
 
 /**
@@ -572,9 +584,9 @@ export function buildEditPickMenu(
       .setCustomId(`essort:editpick:${board.id}`)
       .setPlaceholder('Tâche à modifier…')
       .addOptions(
-        options.map(({ task, date }, i) => {
+        options.map(({ task, date, crmKey }, i) => {
           const option = new StringSelectMenuOptionBuilder()
-            .setValue(String(task.id))
+            .setValue(crmKey ? `crm:${crmKey}` : String(task.id))
             .setLabel(
               truncate(
                 withDay

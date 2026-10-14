@@ -537,10 +537,14 @@ export interface DueTask {
 }
 
 export interface UpcomingItem {
+  /** Lead + action + date, comme `CrmAction.key` : pour la retrouver et la modifier. */
+  key: string;
   date: string;
   time: string | null;
   label: string;
   match: CrmMatch;
+  /** La consigne et le téléphone, repris si l'action devient une tâche. */
+  details: string;
 }
 
 /** Une action lue dans le CRM, quelle que soit sa date. */
@@ -638,7 +642,14 @@ export function buildAgenda(leads: Lead[], today: string, weekDays = WEEK_DAYS):
         });
         heats.set(lead.id, heat(lead));
       } else if (delta <= weekDays) {
-        agenda.upcoming.push({ date: step.date, time: step.time, label: step.label, match });
+        agenda.upcoming.push({
+          key: `${lead.id}|${step.signature}`,
+          date: step.date,
+          time: step.time,
+          label: step.label,
+          match,
+          details: taskDetails(lead, step, today),
+        });
       }
     }
   }
