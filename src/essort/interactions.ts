@@ -8,12 +8,14 @@ import {
 import { essortMembers } from '../config';
 import { logger } from '../logger';
 import { getBoardById, getTask, listPlannedTasks, listTasks } from '../db/essortRepository';
-import { addDays, parseDayInput, parseTimeInput } from './planner';
+import { addDays, compareTime, parseDayInput, parseTimeInput } from './planner';
 import {
   carryAll,
+  crmActionAsTask,
   editTask,
   essortToday,
   finishEvening,
+  pendingCrmActions,
   planTask,
   refreshBoard,
   removeTasks,
@@ -30,6 +32,7 @@ import {
   buildUnplanMenu,
   dayLabel,
   dayOrder,
+  type EditableTask,
 } from './ui';
 
 export function isEssortInteraction(customId: string): boolean {
@@ -225,10 +228,24 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
     case 'edit':
     case 'wedit': {
       const fromWeek = parsed.action === 'wedit';
-      const items = fromWeek
-        ? (await listPlannedTasks(board.person, addDays(board.board_date, 1), '9999-12-31'))
-            .filter((t) => !t.is_done)
-            .map((task) => ({ task, date: task.essort_boards.board_date }))
+      // Depuis la semaine : les tâches posées sur les jours à venir, et les
+      // actions du CRM de la semaine pas encore au planning (sans heure, le
+      // plus souvent : c'est là qu'on veut en ajouter une).
+      const items: EditableTask[] = fromWeek
+        ? [
+            ...(await listPlannedTasks(board.person, addDays(board.board_date, 1), '9999-12-31'))
+              .filter((t) => !t.is_done)
+              .map((task) => ({ task, date: task.essort_boards.board_date })),
+            ...(await pendingCrmActions(board))
+              .filter((u) => u.key)
+              .map((u) => ({
+                task: { id: 0, label: u.label, due_time: u.time },
+                date: u.date,
+                crmKey: u.key,
+              })),
+          ].sort(
+            (a, b) => a.date.localeCompare(b.date) || compareTime(a.task.due_time, b.task.due_time),
+          )
         : dayOrder(await listTasks(board.id))
             .filter((t) => !t.is_done)
             .map((task) => ({ task, date: board.board_date }));
@@ -251,7 +268,12 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
 
     case 'editpick': {
       const select = interaction as StringSelectMenuInteraction;
-      const task = await getTask(Number(select.values[0]));
+      const value = select.values[0] ?? '';
+      // Une action du CRM devient d'abord une tâche de son jour.
+      const fromCrm = value.startsWith('crm:')
+        ? await crmActionAsTask(board, value.slice(4))
+        : null;
+      const task = fromCrm ? fromCrm.task : await getTask(Number(value));
       const taskBoard = task ? await getBoardById(task.board_id) : null;
       if (!task || !taskBoard || task.dismissed_at || task.is_done) {
         await select.update({

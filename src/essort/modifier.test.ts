@@ -64,6 +64,28 @@ describe('modifier une tâche', () => {
     });
   });
 
+  it('la semaine propose aussi les actions du CRM sans heure', () => {
+    const menu = buildEditPickMenu(
+      board,
+      [
+        { task: task({}), date: '2026-10-12' },
+        {
+          task: { id: 0, label: 'R2 avec Hélène', due_time: null },
+          date: '2026-10-16',
+          crmKey: 'recABC|r2|2026-10-16',
+        },
+      ],
+      true,
+    ).toJSON().components[0] as {
+      options: { label: string; value: string; description: string }[];
+    };
+    expect(menu.options[1]).toEqual({
+      label: 'R2 avec Hélène',
+      value: 'crm:recABC|r2|2026-10-16',
+      description: 'Vendredi 16/10',
+    });
+  });
+
   it('le formulaire est prérempli avec le texte, le jour et l’heure', () => {
     const modal = buildEditModal(7, task({}), '2026-10-12').toJSON();
     expect(modal.custom_id).toBe('essort:editmodal:7:42');

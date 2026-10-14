@@ -214,9 +214,14 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
     keep.add(added.id);
   }
 
+  // Une tâche du CRM non faite disparaît quand son action n'est plus due ici
+  // (date repoussée, lead mort)… sauf si cette action existe toujours dans le
+  // CRM : c'est alors la personne qui l'a déplacée ici depuis Discord.
+  const stillInCrm = new Set(plan.actions.map((a) => a.key));
   for (const t of tasks) {
     const open = !t.is_done && !t.dismissed_at;
-    if (t.source === 'airtable' && open && !keep.has(t.id)) await deleteTask(t.id);
+    const movedHere = stillInCrm.has(`${t.record_id}|${t.signature}`);
+    if (t.source === 'airtable' && open && !keep.has(t.id) && !movedHere) await deleteTask(t.id);
   }
 
   await updateBoard(board.id, {
@@ -301,23 +306,20 @@ async function upsertMessage(
   return sent.id;
 }
 
-async function weekItems(board: EssortBoardRow): Promise<{ items: WeekItem[]; planned: number }> {
+async function weekItems(
+  board: EssortBoardRow,
+): Promise<{ items: WeekItem[]; planned: number; crm: number }> {
   const from = addDays(board.board_date, 1);
   const to = addDays(board.board_date, WEEK_DAYS);
   // Toutes les tâches planifiées à venir : le menu « Retirer » va au-delà de la semaine.
   const planned = await listPlannedTasks(board.person, from, '9999-12-31');
-  // Une action du CRM déjà planifiée à la main ce jour-là n'apparaît qu'une fois.
-  const items: WeekItem[] = (board.extras?.upcoming ?? [])
-    .filter(
-      (u) =>
-        !planned.some(
-          (t) =>
-            t.source === 'manual' &&
-            t.essort_boards.board_date === u.date &&
-            duplicatesCrm({ label: t.label, time: t.due_time }, u),
-        ),
-    )
-    .map((u) => ({ date: u.date, time: u.time, label: u.label, kind: 'airtable' as const }));
+  const crm = await pendingCrmActions(board, planned);
+  const items: WeekItem[] = crm.map((u) => ({
+    date: u.date,
+    time: u.time,
+    label: u.label,
+    kind: 'airtable' as const,
+  }));
   for (const t of planned) {
     const date = t.essort_boards.board_date;
     if (date <= to) items.push({ date, time: t.due_time, label: t.label, kind: 'planned' });
@@ -325,7 +327,88 @@ async function weekItems(board: EssortBoardRow): Promise<{ items: WeekItem[]; pl
   for (const r of await reminderLines(memberOf(board.person)?.userId ?? null, from, to)) {
     items.push({ date: r.date, time: r.time, label: r.label, kind: 'reminder' });
   }
-  return { items, planned: planned.length };
+  return { items, planned: planned.length, crm: crm.length };
+}
+
+type UpcomingAction = NonNullable<EssortBoardRow['extras']['upcoming']>[number];
+
+/**
+ * Les actions du CRM des jours à venir qui ne sont pas encore au planning :
+ * ni déjà écrites à la main ce jour-là, ni déjà devenues une tâche (modifiée,
+ * déplacée ou retirée depuis Discord).
+ */
+export async function pendingCrmActions(
+  board: EssortBoardRow,
+  planned?: TaskWithBoard[],
+): Promise<UpcomingAction[]> {
+  const upcoming = board.extras?.upcoming ?? [];
+  const tasks =
+    planned ?? (await listPlannedTasks(board.person, addDays(board.board_date, 1), '9999-12-31'));
+  const recordIds = [...new Set(upcoming.map((u) => u.key?.split('|')[0]).filter(Boolean))];
+  const taken = new Set(
+    (await listAirtableTasksFor(recordIds as string[])).map((t) => `${t.record_id}|${t.signature}`),
+  );
+  return upcoming.filter(
+    (u) =>
+      !(u.key && taken.has(u.key)) &&
+      !tasks.some(
+        (t) =>
+          t.source === 'manual' &&
+          t.essort_boards.board_date === u.date &&
+          duplicatesCrm({ label: t.label, time: t.due_time }, u),
+      ),
+  );
+}
+
+/**
+ * Une action du CRM des jours à venir devient une tâche de son jour, pour
+ * pouvoir être modifiée depuis Discord (heure, jour, texte). Renvoie la tâche
+ * (déjà créée si on l'avait déjà fait), ou null si l'action n'existe plus.
+ */
+export async function crmActionAsTask(
+  board: EssortBoardRow,
+  key: string,
+): Promise<{ task: EssortTaskRow; date: string } | null> {
+  const fresh = (await getBoardById(board.id)) ?? board;
+  const action = (fresh.extras?.upcoming ?? []).find((u) => u.key === key);
+  if (!action) return null;
+  const [recordId, ...rest] = key.split('|');
+  const signature = rest.join('|');
+  if (!recordId || !signature) return null;
+  const existing = (await listAirtableTasksFor([recordId])).find(
+    (t) => t.signature === signature && !t.dismissed_at,
+  );
+  const { board: target } = await ensureBoard(board.person, action.date, board.channel_id);
+  if (existing) return { task: existing, date: target.board_date };
+  const task = await addTask({
+    board_id: target.id,
+    source: 'airtable',
+    record_id: recordId,
+    signature,
+    label: action.label,
+    details: action.details ?? null,
+    due_time: action.time,
+    position: nextPosition(await listTasks(target.id, true)),
+  });
+  return { task, date: action.date };
+}
+
+/**
+ * Les tâches du CRM posées sur les jours à venir (modifiées depuis Discord)
+ * disparaissent quand le CRM change leur action ou leur date : le CRM reprend
+ * la main, sa nouvelle action apparaît à la place.
+ */
+export async function pruneFutureCrmTasks(
+  person: EssortPerson,
+  today: string,
+  agenda: Agenda,
+): Promise<void> {
+  const stillInCrm = new Set(agenda.people[person].actions.map((a) => a.key));
+  const future = await listPlannedTasks(person, addDays(today, 1), '9999-12-31');
+  for (const t of future) {
+    if (t.source !== 'airtable' || t.is_done) continue;
+    if (!stillInCrm.has(`${t.record_id}|${t.signature}`)) await deleteTask(t.id);
+  }
 }
 
 /** Publie ou met à jour les messages du tableau (semaine d'abord, puis jour). */
@@ -342,11 +425,14 @@ export async function renderBoard(
   const userId = memberOf(board.person)?.userId ?? null;
 
   if (parts.week !== false) {
-    const { items, planned } = await weekItems(board);
+    const { items, planned, crm } = await weekItems(board);
     const id = await upsertMessage(
       channel,
       board.week_message_id,
-      { embeds: [buildWeekEmbed(board, items)], components: buildWeekComponents(board, planned) },
+      {
+        embeds: [buildWeekEmbed(board, items)],
+        components: buildWeekComponents(board, planned, planned + crm),
+      },
       [],
       live,
     );
@@ -420,6 +506,7 @@ async function publishBoard(
     // à 19h est déjà sur le tableau du jour.
     await archivePastBoards(client, member.person, date);
     await reconcile(board, agenda);
+    if (agenda) await pruneFutureCrmTasks(member.person, date, agenda);
     await replaceLoneDayMessage(client, board);
     await renderBoard(client, board.id);
     await schedulePings(client, board.id);
@@ -489,6 +576,7 @@ export async function syncFromCrm(client: Client): Promise<void> {
       if (!board?.message_id || board.archived_at) continue;
       await withBoardLock(board.id, async () => {
         await reconcile((await getBoardById(board.id)) ?? board, agenda);
+        await pruneFutureCrmTasks(m.person, date, agenda);
         await renderBoard(client, board.id);
         await schedulePings(client, board.id);
         // Une question du soir encore ouverte suit aussi : une tâche du jour
