@@ -195,7 +195,12 @@ export async function listTasksByIds(ids: number[]): Promise<EssortTaskRow[]> {
 
 export async function addTask(
   task: Pick<EssortTaskRow, 'board_id' | 'source' | 'label'> &
-    Partial<Pick<EssortTaskRow, 'record_id' | 'signature' | 'details' | 'due_time' | 'position'>>,
+    Partial<
+      Pick<
+        EssortTaskRow,
+        'record_id' | 'signature' | 'details' | 'due_time' | 'position' | 'dismissed_at'
+      >
+    >,
 ): Promise<EssortTaskRow> {
   const { data, error } = await supabase.from(TASKS).insert(task).select().single();
   if (error) throw new Error(`addTask: ${error.message}`);

@@ -206,15 +206,17 @@ describe('question du soir', () => {
     ];
     const msg = buildEveningMessage(board(), items, '<@1>');
     // La tâche déjà reportée ne compte plus dans ce qui reste.
-    expect(msg.content).toBe('<@1> Il reste 2 tâches aujourd’hui. Lesquelles reporter à demain ?');
+    expect(msg.content).toBe(
+      '<@1> Il reste 2 tâches aujourd’hui. Lesquelles reporter à demain ? Le reste sera oublié.',
+    );
     expect(msg.embeds[0]!.toJSON().description).toBe(
       '**1.** `11:00` Appeler Paul\n**2.** Devis → **demain**\n**3.** Mail',
     );
     const [tasksRow, actions] = msg.components.map((r) => r.toJSON());
     expect((tasksRow!.components as Button[]).map((b) => [b.label, b.custom_id, b.style])).toEqual([
-      ['1', 'essort:carrytoggle:1:1', 2],
+      ['Reporter 1', 'essort:carrytoggle:1:1', 2],
       ['2 → demain', 'essort:carrytoggle:1:2', 3],
-      ['3', 'essort:carrytoggle:1:3', 2],
+      ['Reporter 3', 'essort:carrytoggle:1:3', 2],
     ]);
     expect((actions!.components as Button[]).map((b) => b.label)).toEqual([
       'Tout reporter',

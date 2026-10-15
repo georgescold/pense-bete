@@ -151,12 +151,38 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
   const keep = new Set<number>();
   let position = nextPosition(tasks);
   // Ce que la personne a déjà écrit elle-même pour ce jour l'emporte : l'action
-  // du CRM n'est pas ajoutée en double (et une copie déjà là s'efface).
+  // du CRM n'est pas ajoutée en double (et une copie déjà là est masquée).
   const manual = tasks.filter((t) => t.source === 'manual' && !t.dismissed_at);
 
   for (const due of plan.due) {
-    if (manual.some((m) => duplicatesCrm({ label: m.label, time: m.due_time }, due))) continue;
     const onBoard = tasks.filter((t) => t.source === 'airtable' && t.record_id === due.recordId);
+
+    if (manual.some((m) => duplicatesCrm({ label: m.label, time: m.due_time }, due))) {
+      // La tâche écrite tient lieu de l'action : on garde une trace masquée de
+      // l'action pour ce jour, sinon elle reviendrait « en retard » le
+      // lendemain si la tâche écrite n'est ni faite ni reportée.
+      const copy = onBoard.find((t) => t.signature === due.signature);
+      if (!copy) {
+        const noted = await addTask({
+          board_id: board.id,
+          source: 'airtable',
+          record_id: due.recordId,
+          signature: due.signature,
+          label: due.label,
+          details: due.details,
+          due_time: due.time,
+          position: position++,
+          dismissed_at: new Date().toISOString(),
+        });
+        keep.add(noted.id);
+      } else {
+        keep.add(copy.id);
+        if (!copy.is_done && !copy.dismissed_at) {
+          await updateTask(copy.id, { dismissed_at: new Date().toISOString() });
+        }
+      }
+      continue;
+    }
 
     const same = onBoard.find((t) => t.signature === due.signature);
     if (same) {
