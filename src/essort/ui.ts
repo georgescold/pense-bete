@@ -463,7 +463,9 @@ export function buildEveningMessage(
         withButtons.slice(i, i + BUTTONS_PER_ROW).map(({ task, carried }, j) =>
           new ButtonBuilder()
             .setCustomId(`essort:carrytoggle:${board.id}:${task.id}`)
-            .setLabel(carried ? `${i + j + 1} → demain` : String(i + j + 1))
+            // « Reporter n » et non « n » : les numéros du message du jour
+            // cochent une tâche faite, ceux-ci la passent à demain.
+            .setLabel(carried ? `${i + j + 1} → demain` : `Reporter ${i + j + 1}`)
             .setStyle(carried ? ButtonStyle.Success : ButtonStyle.Secondary),
         ),
       ) as Row,
@@ -510,14 +512,16 @@ export function buildEveningMessage(
     content: `${mention ? `${mention} ` : ''}${
       open === 0
         ? 'Tout le reste est fait ou reporté à demain.'
-        : `Il reste ${open === 1 ? '1 tâche' : `${open} tâches`} aujourd’hui. Lesquelles reporter à demain ?`
+        : `Il reste ${open === 1 ? '1 tâche' : `${open} tâches`} aujourd’hui. Lesquelles reporter à demain ? Le reste sera oublié.`
     }`,
     embeds: [
       new EmbedBuilder()
         .setColor(COLOR_WEEK)
         .setTitle(`🌙 Ce soir · ${dayLabel(board.board_date)}`)
         .setDescription(truncate(lines.join('\n'), LIST_BUDGET))
-        .setFooter({ text: 'Un clic sur un numéro le reporte, un second annule.' }),
+        .setFooter({
+          text: '« Reporter » passe la tâche à demain, un second clic annule. Une tâche faite se coche dans le message du jour.',
+        }),
     ],
     components: rows,
   };
