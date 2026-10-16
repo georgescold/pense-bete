@@ -9,9 +9,15 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
-import type { EssortBoardRow, EssortTaskRow, TaskWithBoard } from '../db/essortRepository';
+import type {
+  EssortBoardRow,
+  EssortSpanRow,
+  EssortTaskRow,
+  TaskWithBoard,
+} from '../db/essortRepository';
 import { truncate } from '../lib/format';
 import { addDays, compareTime, shortDate, WEEK_DAYS, weekdayName, type CrmAction } from './planner';
+import { DEFAULT_END_TIME, periodText } from './spans';
 
 /**
  * Deux messages par personne et par jour, dans cet ordre :
@@ -256,9 +262,11 @@ export function buildRemoveMenu(
             .setValue(String(t.id))
             .setLabel(truncate(`${i + 1}. ${withTime(t.due_time, t.label)}`, 100))
             .setDescription(
-              t.source === 'airtable'
-                ? 'Ne reviendra pas tant que le lead ne change pas dans Airtable'
-                : 'Ajoutée à la main',
+              t.span_id
+                ? 'Retirée aussi des jours suivants'
+                : t.source === 'airtable'
+                  ? 'Ne reviendra pas tant que le lead ne change pas dans Airtable'
+                  : 'Ajoutée à la main',
             ),
         ),
       ),
@@ -346,14 +354,32 @@ export function buildWeekComponents(
   ];
 }
 
-/** Choix du jour à planifier : aujourd'hui et les 24 jours suivants. */
+/** Valeurs du menu « Pour quand ? » qui ne sont pas un jour. */
+export const PLAN_PERMANENT = 'permanent';
+export const PLAN_PERIOD = 'period';
+
+/**
+ * Choix de quand planifier : tous les jours (jusqu'à être faite), sur une
+ * période, ou un jour précis (aujourd'hui et les 22 jours suivants).
+ */
 export function buildPlanDayMenu(board: EssortBoardRow): ActionRowBuilder<StringSelectMenuBuilder> {
+  const special = [
+    new StringSelectMenuOptionBuilder()
+      .setValue(PLAN_PERMANENT)
+      .setLabel('Tous les jours, jusqu’à ce qu’elle soit faite')
+      .setDescription('Revient chaque jour tant qu’elle n’est pas cochée'),
+    new StringSelectMenuOptionBuilder()
+      .setValue(PLAN_PERIOD)
+      .setLabel('Sur une période')
+      .setDescription('Du jour et de l’heure de début à ceux de fin'),
+  ];
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`essort:planday:${board.id}`)
-      .setPlaceholder('Quel jour ?')
+      .setPlaceholder('Pour quand ?')
       .addOptions(
-        Array.from({ length: MAX_OPTIONS }, (_, i) => {
+        ...special,
+        ...Array.from({ length: MAX_OPTIONS - special.length }, (_, i) => {
           const date = addDays(board.board_date, i);
           const label =
             i === 0
@@ -398,27 +424,150 @@ export function buildTaskModal(boardId: number, date: string, from: 'plan' | 'ad
     );
 }
 
-/** Menu des tâches planifiées à retirer (jours à venir). */
+/**
+ * Menu des tâches planifiées à retirer (jours à venir), et des périodes qui
+ * n'ont pas encore commencé (valeur `span:<id>`).
+ */
 export function buildUnplanMenu(
   board: EssortBoardRow,
   planned: TaskWithBoard[],
+  spans: EssortSpanRow[] = [],
 ): ActionRowBuilder<StringSelectMenuBuilder> {
-  const options = planned.slice(0, MAX_OPTIONS);
+  const options = [
+    ...planned.map((t) =>
+      new StringSelectMenuOptionBuilder()
+        .setValue(String(t.id))
+        .setLabel(truncate(withTime(t.due_time, t.label), 100))
+        .setDescription(dayLabel(t.essort_boards.board_date)),
+    ),
+    ...spans.map((s) =>
+      new StringSelectMenuOptionBuilder()
+        .setValue(`span:${s.id}`)
+        .setLabel(truncate(s.label, 100))
+        .setDescription(truncate(capitalize(periodText(s)), 100)),
+    ),
+  ].slice(0, MAX_OPTIONS);
   return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`essort:unplanpick:${board.id}`)
       .setPlaceholder('Tâches planifiées à retirer…')
       .setMinValues(1)
       .setMaxValues(options.length)
-      .addOptions(
-        options.map((t) =>
-          new StringSelectMenuOptionBuilder()
-            .setValue(String(t.id))
-            .setLabel(truncate(withTime(t.due_time, t.label), 100))
-            .setDescription(dayLabel(t.essort_boards.board_date)),
-        ),
-      ),
+      .addOptions(options),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Tâches permanentes et périodes
+// ---------------------------------------------------------------------------
+
+function labelInput(value?: string): ActionRowBuilder<TextInputBuilder> {
+  const input = new TextInputBuilder()
+    .setCustomId('label')
+    .setLabel('Que faut-il faire ?')
+    .setPlaceholder('Ex. : préparer la présentation de lundi')
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(200)
+    .setRequired(true);
+  if (value !== undefined) input.setValue(truncate(value, 200));
+  return new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+}
+
+function momentInput(id: 'start' | 'end', value?: string): ActionRowBuilder<TextInputBuilder> {
+  const input = new TextInputBuilder()
+    .setCustomId(id)
+    .setLabel(id === 'start' ? 'Début (vide = maintenant)' : 'Fin')
+    .setPlaceholder(
+      id === 'start'
+        ? 'Ex. : lundi 9h, 12/10 14h30'
+        : `Ex. : mercredi 18h (sans heure : ${DEFAULT_END_TIME})`,
+    )
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(30)
+    .setRequired(id === 'end');
+  if (value !== undefined) input.setValue(value);
+  return new ActionRowBuilder<TextInputBuilder>().addComponents(input);
+}
+
+/** Un jour et une heure, écrits comme `parseMomentInput` les relit : « Lundi 12/10 09:00 ». */
+function momentValue(date: string, time: string | null): string {
+  return time ? `${dayLabel(date)} ${time}` : dayLabel(date);
+}
+
+/** Une tâche de tous les jours : le texte seulement. */
+export function buildPermanentModal(boardId: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`essort:permmodal:${boardId}`)
+    .setTitle('Tâche de tous les jours')
+    .addComponents(labelInput());
+}
+
+/** Une tâche sur une période : le texte, le début et la fin (jour et heure). */
+export function buildPeriodModal(boardId: number): ModalBuilder {
+  return new ModalBuilder()
+    .setCustomId(`essort:periodmodal:${boardId}`)
+    .setTitle('Tâche sur une période')
+    .addComponents(labelInput(), momentInput('start'), momentInput('end'));
+}
+
+/** Modifier une tâche permanente (son texte) ou une période (texte, début, fin). */
+export function buildSpanEditModal(boardId: number, span: EssortSpanRow): ModalBuilder {
+  const modal = new ModalBuilder()
+    .setCustomId(`essort:spaneditmodal:${boardId}:${span.id}`)
+    .setTitle(span.kind === 'permanent' ? 'Modifier la tâche' : 'Modifier la période');
+  if (span.kind === 'permanent') return modal.addComponents(labelInput(span.label));
+  return modal.addComponents(
+    labelInput(span.label),
+    momentInput('start', momentValue(span.start_date, span.start_time)),
+    momentInput('end', momentValue(span.end_date ?? span.start_date, span.end_time)),
+  );
+}
+
+/**
+ * La période est finie : « Elle a pu être faite ? ». Le message ne dépend
+ * d'aucun tableau (`essort:span…:<id de la période>`) : on peut y répondre
+ * le lendemain.
+ */
+export function buildSpanQuestion(
+  span: EssortSpanRow,
+  mention: string | null,
+): { content: string; components: Row[] } {
+  return {
+    content: `${mention ? `${mention} ` : ''}Fin de la période : **${span.label}** (${periodText(span)}). Elle a pu être faite ?`,
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`essort:spandone:${span.id}`)
+          .setLabel('Faite')
+          .setEmoji('✅')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`essort:spanmore:${span.id}`)
+          .setLabel('Reporter')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`essort:spandrop:${span.id}`)
+          .setLabel('Abandonner')
+          .setStyle(ButtonStyle.Secondary),
+      ) as Row,
+    ],
+  };
+}
+
+/** « Reporter » : la nouvelle fin, préremplie au lendemain à la même heure. */
+export function buildSpanReportModal(span: EssortSpanRow, today: string): ModalBuilder {
+  const end = span.end_date && span.end_date > today ? span.end_date : today;
+  return new ModalBuilder()
+    .setCustomId(`essort:spanmoremodal:${span.id}`)
+    .setTitle(truncate(`Reporter · ${span.label}`, 45))
+    .addComponents(momentInput('end', momentValue(addDays(end, 1), span.end_time)));
+}
+
+/** Rappel de la période dans une réponse : « du lun. 12/10 09:00 au mer. 14/10 18:00 ». */
+export function spanWhen(span: EssortSpanRow): string {
+  return span.kind === 'permanent'
+    ? 'tous les jours, jusqu’à ce qu’elle soit faite'
+    : periodText(span);
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +720,8 @@ export interface EditableTask {
   task: Pick<EssortTaskRow, 'id' | 'label' | 'due_time'>;
   date: string;
   crmKey?: string;
+  /** Une tâche permanente ou une période : elle se modifie entière, pas jour par jour. */
+  spanId?: number;
 }
 
 /**
@@ -588,9 +739,9 @@ export function buildEditPickMenu(
       .setCustomId(`essort:editpick:${board.id}`)
       .setPlaceholder('Tâche à modifier…')
       .addOptions(
-        options.map(({ task, date, crmKey }, i) => {
+        options.map(({ task, date, crmKey, spanId }, i) => {
           const option = new StringSelectMenuOptionBuilder()
-            .setValue(crmKey ? `crm:${crmKey}` : String(task.id))
+            .setValue(crmKey ? `crm:${crmKey}` : spanId ? `span:${spanId}` : String(task.id))
             .setLabel(
               truncate(
                 withDay

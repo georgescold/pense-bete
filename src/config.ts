@@ -41,6 +41,9 @@ const schema = z.object({
   // Le soir, le bot demande quelles tâches non faites passer au lendemain.
   // Rien n'est jamais reporté sans réponse.
   ESSORT_EVENING_CRON: z.string().default('0 19 * * *'),
+  // Une tâche sur une période : à sa fin, le bot demande si elle a pu être
+  // faite (faite, reportée ou abandonnée). Vérifié toutes les minutes.
+  ESSORT_SPAN_CRON: z.string().default('* * * * *'),
   // Une personne n'a de tableau que si son salon est défini. L'identifiant
   // Discord sert à la mentionner et à limiter qui peut cocher.
   ESSORT_LOYS_CHANNEL_ID: z.string().optional(),
