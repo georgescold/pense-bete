@@ -2,23 +2,31 @@ import { Client, userMention, type BaseMessageOptions, type SendableChannels } f
 import { config, essortMembers, type EssortMember, type EssortPerson } from '../config';
 import { logger } from '../logger';
 import {
+  addSpan,
   addTask,
   deleteTask,
   ensureBoard,
   getBoard,
   getBoardById,
+  getSpan,
   getTask,
   listBoardsToArchive,
   listAirtableTasksFor,
   listCarriedFrom,
+  listOpenSpans,
   listPlannedTasks,
+  listSpanRows,
   listTasks,
   listTasksToSync,
   moveTask,
   updateBoard,
+  updateSpan,
   updateTask,
   type EssortBoardRow,
+  type EssortSpanRow,
   type EssortTaskRow,
+  type SpanKind,
+  type SpanPatch,
   type TaskWithBoard,
 } from '../db/essortRepository';
 import { listRemindersByUser } from '../db/repository';
@@ -42,9 +50,21 @@ import {
   type CrmAction,
 } from './planner';
 import {
+  DEFAULT_END_TIME,
+  isSpanOpen,
+  spanClosedText,
+  spanDetails,
+  spanEnd,
+  spanRowTime,
+  spanShowsOn,
+  spanWeekLines,
+  type Moment,
+} from './spans';
+import {
   buildDayComponents,
   buildDayEmbed,
   buildEveningMessage,
+  buildSpanQuestion,
   crmUpdateMessage,
   eveningSummary,
   type EveningItem,
@@ -334,7 +354,7 @@ async function upsertMessage(
 
 async function weekItems(
   board: EssortBoardRow,
-): Promise<{ items: WeekItem[]; planned: number; crm: number }> {
+): Promise<{ items: WeekItem[]; planned: number; crm: number; spans: number }> {
   const from = addDays(board.board_date, 1);
   const to = addDays(board.board_date, WEEK_DAYS);
   // Toutes les tâches planifiées à venir : le menu « Retirer » va au-delà de la semaine.
@@ -353,7 +373,16 @@ async function weekItems(
   for (const r of await reminderLines(memberOf(board.person)?.userId ?? null, from, to)) {
     items.push({ date: r.date, time: r.time, label: r.label, kind: 'reminder' });
   }
-  return { items, planned: planned.length, crm: crm.length };
+  const spans = await listOpenSpans(board.person);
+  for (const span of spans) {
+    for (const line of spanWeekLines(span, from, to)) items.push({ ...line, kind: 'planned' });
+  }
+  return {
+    items,
+    planned: planned.length,
+    crm: crm.length,
+    spans: spans.filter((s) => s.start_date >= from).length,
+  };
 }
 
 type UpcomingAction = NonNullable<EssortBoardRow['extras']['upcoming']>[number];
@@ -451,13 +480,13 @@ export async function renderBoard(
   const userId = memberOf(board.person)?.userId ?? null;
 
   if (parts.week !== false) {
-    const { items, planned, crm } = await weekItems(board);
+    const { items, planned, crm, spans } = await weekItems(board);
     const id = await upsertMessage(
       channel,
       board.week_message_id,
       {
         embeds: [buildWeekEmbed(board, items)],
-        components: buildWeekComponents(board, planned, planned + crm),
+        components: buildWeekComponents(board, planned + spans, planned + crm + spans),
       },
       [],
       live,
@@ -532,6 +561,7 @@ async function publishBoard(
     // à 19h est déjà sur le tableau du jour.
     await archivePastBoards(client, member.person, date);
     await reconcile(board, agenda);
+    await placeSpans(board);
     if (agenda) await pruneFutureCrmTasks(member.person, date, agenda);
     await replaceLoneDayMessage(client, board);
     await renderBoard(client, board.id);
@@ -682,6 +712,7 @@ export function refreshBoard(client: Client, board: EssortBoardRow): Promise<voi
   return withBoardLock(board.id, async () => {
     const fresh = (await getBoardById(board.id)) ?? board;
     await reconcile(fresh, await readAgenda(fresh.board_date, [0]));
+    await placeSpans(fresh);
     await renderBoard(client, board.id);
     await schedulePings(client, board.id);
     calendarFollows();
@@ -742,7 +773,8 @@ export function editTask(
 ): Promise<string | null> {
   return withBoardLock(todayBoard.id, async () => {
     const task = await getTask(taskId);
-    if (!task || task.dismissed_at || task.is_done) return null;
+    // Une tâche permanente ou une période se modifie entière (`editSpan`).
+    if (!task || task.dismissed_at || task.is_done || task.span_id) return null;
     const from = await getBoardById(task.board_id);
     if (!from || from.person !== todayBoard.person) return null;
 
@@ -802,6 +834,9 @@ export function removeTasks(
       const task = await getTask(id);
       if (!task || task.board_id !== board.id || task.dismissed_at) continue;
       await dismissTask(task);
+      // Retirée pour de bon : elle ne revient pas les jours suivants.
+      const span = task.span_id ? await getSpan(task.span_id) : null;
+      if (span && isSpanOpen(span)) await dropSpan(client, span, null);
       removed.push(task.label);
     }
     if (removed.length > 0) {
@@ -855,6 +890,7 @@ export function toggleTasks(
         done_by: done ? doneBy : null,
       });
       if (!done) void removeFromSheet(task.id);
+      if (task.span_id) await spanRowToggled(client, task.span_id, done, doneBy);
     }
     await renderBoard(client, board.id, { week: false });
     await refreshEveningIfOpen(client, board.id);
@@ -872,7 +908,8 @@ export function toggleTasks(
  * report ne doit pas renuméroter les boutons.
  */
 async function eveningItems(board: EssortBoardRow): Promise<EveningItem[]> {
-  const open = (await listTasks(board.id)).filter((t) => !t.is_done);
+  // Une tâche permanente revient seule demain ; une période a sa propre question.
+  const open = (await listTasks(board.id)).filter((t) => !t.is_done && !t.span_id);
   const carried = (await listCarriedFrom(board.id)).filter(
     (t) => t.board_id !== board.id && !t.is_done,
   );
@@ -958,7 +995,7 @@ export function toggleCarry(
     );
     for (const id of taskIds) {
       const task = await getTask(id);
-      if (!task || task.is_done || task.dismissed_at) continue;
+      if (!task || task.is_done || task.dismissed_at || task.span_id) continue;
       if (task.board_id === board.id) {
         const position = nextPosition(await listTasks(tomorrow.id, true));
         await moveTask(task.id, tomorrow.id, position, board.id);
@@ -976,7 +1013,7 @@ export function toggleCarry(
 
 /** « Tout reporter » : toutes les tâches encore sur le jour passent à demain. */
 export async function carryAll(client: Client, board: EssortBoardRow, by: string): Promise<void> {
-  const open = (await listTasks(board.id)).filter((t) => !t.is_done).map((t) => t.id);
+  const open = (await listTasks(board.id)).filter((t) => !t.is_done && !t.span_id).map((t) => t.id);
   await toggleCarry(client, board, open);
   await finishEvening(client, board, by);
 }
@@ -1084,6 +1121,326 @@ export async function restoreTodayPings(client: Client): Promise<void> {
     const board = await getBoard(m.person, date);
     if (board) await schedulePings(client, board.id);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tâches de tous les jours et tâches sur une période
+// ---------------------------------------------------------------------------
+
+/**
+ * Pose sur le tableau la ligne du jour de chaque tâche permanente ou période
+ * qui s'y affiche, et tient à jour celles déjà posées (texte, heure, échéance).
+ * Une ligne cochée ou retirée n'est plus touchée.
+ */
+export async function placeSpans(board: EssortBoardRow): Promise<void> {
+  if (board.archived_at) return;
+  const tasks = await listTasks(board.id, true);
+  let position = nextPosition(tasks);
+  for (const span of await listOpenSpans(board.person)) {
+    const row = tasks.find((t) => t.span_id === span.id);
+    const shows = spanShowsOn(span, board.board_date);
+    const wanted = {
+      label: span.label,
+      details: spanDetails(span, board.board_date),
+      due_time: spanRowTime(span, board.board_date),
+    };
+    if (!row) {
+      if (shows) {
+        await addTask({
+          board_id: board.id,
+          source: 'manual',
+          span_id: span.id,
+          position: position++,
+          ...wanted,
+        });
+      }
+    } else if (!row.is_done && !row.dismissed_at) {
+      // Plus ce jour-ci (début repoussé) : la ligne s'en va.
+      if (!shows) await deleteTask(row.id);
+      else if (
+        row.label !== wanted.label ||
+        row.details !== wanted.details ||
+        row.due_time !== wanted.due_time
+      ) {
+        await updateTask(row.id, {
+          ...wanted,
+          ...(row.due_time !== wanted.due_time ? { pings_sent: 0 } : {}),
+        });
+      }
+    }
+  }
+}
+
+/** Le tableau du jour de la personne suit, s'il est déjà publié. */
+async function refreshPersonToday(client: Client, person: EssortPerson): Promise<void> {
+  const board = await getBoard(person, essortToday());
+  if (!board?.message_id || board.archived_at) return;
+  await withBoardLock(board.id, async () => {
+    await placeSpans(board);
+    await renderBoard(client, board.id);
+    await schedulePings(client, board.id);
+  });
+}
+
+/** Les périodes pas encore commencées : la semaine les montre, on peut les modifier ou les retirer. */
+export async function futureSpans(board: EssortBoardRow): Promise<EssortSpanRow[]> {
+  return (await listOpenSpans(board.person)).filter((s) => s.start_date > board.board_date);
+}
+
+/**
+ * Crée une tâche permanente (dès aujourd'hui) ou une période pour la personne
+ * du tableau. Elle apparaît aussitôt si elle commence aujourd'hui.
+ */
+export async function createSpan(
+  client: Client,
+  todayBoard: EssortBoardRow,
+  input: { kind: SpanKind; label: string; start: Moment; end: Moment | null },
+): Promise<EssortSpanRow> {
+  const span = await addSpan({
+    person: todayBoard.person,
+    channel_id: todayBoard.channel_id,
+    kind: input.kind,
+    label: input.label,
+    start_date: input.start.date,
+    start_time: input.start.time,
+    end_date: input.end?.date ?? null,
+    end_time: input.end ? (input.end.time ?? DEFAULT_END_TIME) : null,
+  });
+  await withBoardLock(todayBoard.id, async () => {
+    await placeSpans((await getBoardById(todayBoard.id)) ?? todayBoard);
+    await renderBoard(client, todayBoard.id);
+    await schedulePings(client, todayBoard.id);
+  });
+  logger.info(
+    { person: span.person, span: span.id, kind: span.kind, label: span.label },
+    'tache Essort sur plusieurs jours creee',
+  );
+  return span;
+}
+
+/**
+ * Modifie une tâche permanente (texte) ou une période (texte, début, fin) et
+ * renvoie la version enregistrée, ou null si elle est close ou n'existe plus.
+ * Une fin déplacée après la question de fin la clôt comme un report.
+ */
+export function editSpan(
+  client: Client,
+  todayBoard: EssortBoardRow,
+  spanId: number,
+  change: { label: string; start?: Moment; end?: Moment },
+): Promise<EssortSpanRow | null> {
+  return withBoardLock(todayBoard.id, async () => {
+    const span = await getSpan(spanId);
+    if (!span || !isSpanOpen(span) || span.person !== todayBoard.person) return null;
+    const patch: SpanPatch = { label: change.label };
+    if (span.kind === 'period' && change.start && change.end) {
+      patch.start_date = change.start.date;
+      patch.start_time = change.start.time;
+      patch.end_date = change.end.date;
+      patch.end_time = change.end.time ?? DEFAULT_END_TIME;
+    }
+    const endMoved =
+      patch.end_date !== undefined &&
+      (patch.end_date !== span.end_date || patch.end_time !== span.end_time);
+    if (endMoved) Object.assign(patch, { asked_at: null, ask_message_id: null });
+    const updated = await updateSpan(span.id, patch);
+    if (!updated) return null;
+    if (endMoved) await closeSpanQuestion(client, span, spanClosedText(updated, 'report', null));
+
+    await placeSpans((await getBoardById(todayBoard.id)) ?? todayBoard);
+    await renderBoard(client, todayBoard.id);
+    await schedulePings(client, todayBoard.id);
+    logger.info(
+      { person: span.person, span: span.id, ...patch },
+      'tache Essort sur plusieurs jours modifiee',
+    );
+    return updated;
+  });
+}
+
+/** Retire des périodes pas encore commencées (menu « Retirer » de la semaine). */
+export function removeSpans(
+  client: Client,
+  todayBoard: EssortBoardRow,
+  spanIds: number[],
+): Promise<string[]> {
+  return withBoardLock(todayBoard.id, async () => {
+    const removed: string[] = [];
+    for (const id of spanIds) {
+      const span = await getSpan(id);
+      if (!span || !isSpanOpen(span) || span.person !== todayBoard.person) continue;
+      await dropSpan(client, span, null);
+      removed.push(span.label);
+    }
+    if (removed.length > 0) await renderBoard(client, todayBoard.id);
+    return removed;
+  });
+}
+
+/** Retire une tâche permanente ou une période : elle ne s'affiche plus nulle part. */
+async function dropSpan(client: Client, span: EssortSpanRow, by: string | null): Promise<void> {
+  await updateSpan(span.id, { dismissed_at: new Date().toISOString() });
+  const today = essortToday();
+  for (const row of await listSpanRows(span.id)) {
+    if (!row.is_done && row.essort_boards.board_date >= today) await dismissTask(row);
+  }
+  await closeSpanQuestion(client, span, spanClosedText(span, 'drop', by));
+}
+
+/**
+ * Sa ligne du jour cochée : la tâche entière est faite (elle ne revient plus,
+ * sa question de fin se clôt). Décochée : elle est rouverte, et une période
+ * déjà finie sera redemandée.
+ */
+async function spanRowToggled(
+  client: Client,
+  spanId: number,
+  done: boolean,
+  by: string,
+): Promise<void> {
+  const span = await getSpan(spanId);
+  if (!span || span.dismissed_at) return;
+  if (done) {
+    await updateSpan(span.id, { done_at: new Date().toISOString(), done_by: by });
+    await closeSpanQuestion(client, span, spanClosedText(span, 'done', by));
+  } else {
+    await updateSpan(span.id, {
+      done_at: null,
+      done_by: null,
+      asked_at: null,
+      ask_message_id: null,
+    });
+  }
+}
+
+/** Clôt la question de fin de période : le message ne garde que la réponse. */
+async function closeSpanQuestion(client: Client, span: EssortSpanRow, text: string): Promise<void> {
+  if (!span.ask_message_id) return;
+  const channel = await fetchChannel(client, span.channel_id);
+  if (!channel) return;
+  try {
+    const msg = await channel.messages.fetch(span.ask_message_id);
+    await msg.edit({ content: text, embeds: [], components: [], allowedMentions: { parse: [] } });
+  } catch (err) {
+    logger.warn({ err, span: span.id }, 'question de fin de periode non close');
+  }
+}
+
+let askingSpans = false;
+
+/**
+ * Toutes les minutes : une période arrivée à sa fin, ni faite ni retirée,
+ * reçoit sa question, une seule fois. Sans réponse, rien ne bouge : elle
+ * reste sur le tableau de son dernier jour.
+ */
+export async function askEndedSpans(client: Client): Promise<void> {
+  if (askingSpans) return;
+  askingSpans = true;
+  try {
+    const now = Date.now();
+    for (const span of await listOpenSpans()) {
+      const end = spanEnd(span);
+      if (end === null || end > now || span.asked_at) continue;
+      try {
+        await askSpan(client, span);
+      } catch (err) {
+        logger.error({ err, span: span.id }, 'question de fin de periode non posee');
+      }
+    }
+  } finally {
+    askingSpans = false;
+  }
+}
+
+async function askSpan(client: Client, span: EssortSpanRow): Promise<void> {
+  const channel = await fetchChannel(client, span.channel_id);
+  if (!channel) return;
+  // Marquée d'abord : à la minute suivante, la question ne repart pas en double.
+  await updateSpan(span.id, { asked_at: new Date().toISOString() });
+  const userId = memberOf(span.person)?.userId ?? null;
+  try {
+    const sent = await channel.send({
+      ...buildSpanQuestion(span, userId ? userMention(userId) : null),
+      allowedMentions: { users: userId ? [userId] : [] },
+    });
+    await updateSpan(span.id, { ask_message_id: sent.id });
+    logger.info({ person: span.person, span: span.id }, 'question de fin de periode posee');
+  } catch (err) {
+    // Rien n'est parti : nouvel essai à la minute suivante.
+    await updateSpan(span.id, { asked_at: null });
+    throw err;
+  }
+}
+
+/**
+ * Réponse à la question de fin de période : « Faite » ou « Abandonner ».
+ * @param messageId le message de la question (si sa référence n'a pas pu être enregistrée)
+ */
+export async function answerSpan(
+  client: Client,
+  spanId: number,
+  answer: 'done' | 'drop',
+  by: string,
+  messageId: string,
+): Promise<void> {
+  const found = await getSpan(spanId);
+  if (!found) return;
+  const span = { ...found, ask_message_id: found.ask_message_id ?? messageId };
+  if (!isSpanOpen(span)) {
+    // Déjà cochée ou retirée depuis le tableau : la question le dit.
+    const outcome = span.done_at ? 'done' : 'drop';
+    await closeSpanQuestion(client, span, spanClosedText(span, outcome, span.done_by));
+    return;
+  }
+
+  if (answer === 'drop') {
+    await dropSpan(client, span, by);
+  } else {
+    const doneAt = new Date().toISOString();
+    await updateSpan(span.id, { done_at: doneAt, done_by: by });
+    // Sa dernière ligne est cochée : le tableau et le Sheet le montrent.
+    const [row] = await listSpanRows(span.id);
+    if (row && !row.is_done) {
+      await updateTask(row.id, { is_done: true, done_at: doneAt, done_by: by });
+      if (row.essort_boards.board_date !== essortToday()) {
+        await withBoardLock(row.board_id, () => renderBoard(client, row.board_id, { week: false }));
+      }
+      void syncDoneTasks();
+    }
+    await closeSpanQuestion(client, span, spanClosedText(span, 'done', by));
+  }
+  await refreshPersonToday(client, span.person);
+  logger.info({ person: span.person, span: span.id, answer, by }, 'fin de periode : reponse');
+}
+
+/** « Reporter » : la période court jusqu'à sa nouvelle fin ; une nouvelle question suivra. */
+export async function reportSpan(
+  client: Client,
+  spanId: number,
+  end: Moment,
+  by: string,
+  messageId: string,
+): Promise<EssortSpanRow | null> {
+  const found = await getSpan(spanId);
+  if (!found || found.kind !== 'period' || !isSpanOpen(found)) return null;
+  const updated = await updateSpan(found.id, {
+    end_date: end.date,
+    end_time: end.time ?? DEFAULT_END_TIME,
+    asked_at: null,
+    ask_message_id: null,
+  });
+  if (!updated) return null;
+  await closeSpanQuestion(
+    client,
+    { ...found, ask_message_id: found.ask_message_id ?? messageId },
+    spanClosedText(updated, 'report', by),
+  );
+  await refreshPersonToday(client, found.person);
+  logger.info(
+    { person: found.person, span: found.id, end: `${updated.end_date} ${updated.end_time}`, by },
+    'periode reportee',
+  );
+  return updated;
 }
 
 // ---------------------------------------------------------------------------

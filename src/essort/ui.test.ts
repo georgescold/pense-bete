@@ -172,14 +172,16 @@ describe('message de la semaine', () => {
     expect(buildWeekComponents(board({ archived_at: 'x' }), 3)).toEqual([]);
   });
 
-  it('planifie d’aujourd’hui à J+24', () => {
+  it('planifie tous les jours, sur une période, ou d’aujourd’hui à J+22', () => {
     const menu = buildPlanDayMenu(board()).toJSON().components[0] as {
       options: { label: string; value: string }[];
     };
     expect(menu.options).toHaveLength(25);
-    expect(menu.options[0]).toEqual({ label: 'Aujourd’hui (08/10)', value: '2026-10-08' });
-    expect(menu.options[1]).toEqual({ label: 'Demain (09/10)', value: '2026-10-09' });
-    expect(menu.options[24]!.value).toBe('2026-11-01');
+    expect(menu.options[0]!.value).toBe('permanent');
+    expect(menu.options[1]!.value).toBe('period');
+    expect(menu.options[2]).toEqual({ label: 'Aujourd’hui (08/10)', value: '2026-10-08' });
+    expect(menu.options[3]).toEqual({ label: 'Demain (09/10)', value: '2026-10-09' });
+    expect(menu.options[24]!.value).toBe('2026-10-30');
   });
 });
 

@@ -58,9 +58,54 @@ export interface EssortTaskRow {
   carried_from: number | null;
   /** Modifiée depuis Discord : une relecture du CRM ne la réécrit pas. */
   edited_at: string | null;
+  /** La ligne du jour d'une tâche permanente ou d'une période (essort_spans). */
+  span_id: number | null;
   sheet_range: string | null;
   created_at: string;
 }
+
+/**
+ * 'permanent' : chaque jour jusqu'à être cochée ; 'period' : chaque jour d'un
+ * créneau, avec une question à la fin.
+ */
+export type SpanKind = 'permanent' | 'period';
+
+export interface EssortSpanRow {
+  id: number;
+  person: EssortPerson;
+  channel_id: string;
+  kind: SpanKind;
+  label: string;
+  /** 'YYYY-MM-DD' et 'HH:MM', heure de Paris. Sans heure : dès le début du jour. */
+  start_date: string;
+  start_time: string | null;
+  /** Fin d'une période (toujours un jour et une heure) ; null pour une permanente. */
+  end_date: string | null;
+  end_time: string | null;
+  done_at: string | null;
+  done_by: string | null;
+  dismissed_at: string | null;
+  /** Question de fin de période, posée une seule fois (remise à zéro par un report). */
+  asked_at: string | null;
+  ask_message_id: string | null;
+  created_at: string;
+}
+
+export type SpanPatch = Partial<
+  Pick<
+    EssortSpanRow,
+    | 'label'
+    | 'start_date'
+    | 'start_time'
+    | 'end_date'
+    | 'end_time'
+    | 'done_at'
+    | 'done_by'
+    | 'dismissed_at'
+    | 'asked_at'
+    | 'ask_message_id'
+  >
+>;
 
 export type BoardPatch = Partial<
   Pick<
@@ -94,6 +139,7 @@ export type TaskPatch = Partial<
 
 const BOARDS = 'essort_boards';
 const TASKS = 'essort_tasks';
+const SPANS = 'essort_spans';
 
 export async function getBoard(person: EssortPerson, date: string): Promise<EssortBoardRow | null> {
   const { data, error } = await supabase
@@ -198,7 +244,7 @@ export async function addTask(
     Partial<
       Pick<
         EssortTaskRow,
-        'record_id' | 'signature' | 'details' | 'due_time' | 'position' | 'dismissed_at'
+        'record_id' | 'signature' | 'details' | 'due_time' | 'position' | 'dismissed_at' | 'span_id'
       >
     >,
 ): Promise<EssortTaskRow> {
@@ -306,5 +352,57 @@ export async function listPlannedTasks(
       a.essort_boards.board_date.localeCompare(b.essort_boards.board_date) ||
       (a.due_time ?? '99').localeCompare(b.due_time ?? '99') ||
       a.id - b.id,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tâches permanentes et périodes
+// ---------------------------------------------------------------------------
+
+export async function addSpan(
+  span: Pick<EssortSpanRow, 'person' | 'channel_id' | 'kind' | 'label' | 'start_date'> &
+    Partial<Pick<EssortSpanRow, 'start_time' | 'end_date' | 'end_time'>>,
+): Promise<EssortSpanRow> {
+  const { data, error } = await supabase.from(SPANS).insert(span).select().single();
+  if (error) throw new Error(`addSpan: ${error.message}`);
+  return data as EssortSpanRow;
+}
+
+export async function getSpan(id: number): Promise<EssortSpanRow | null> {
+  const { data, error } = await supabase.from(SPANS).select().eq('id', id).maybeSingle();
+  if (error) throw new Error(`getSpan: ${error.message}`);
+  return (data as EssortSpanRow) ?? null;
+}
+
+export async function updateSpan(id: number, patch: SpanPatch): Promise<EssortSpanRow | null> {
+  const { data, error } = await supabase
+    .from(SPANS)
+    .update(patch)
+    .eq('id', id)
+    .select()
+    .maybeSingle();
+  if (error) throw new Error(`updateSpan: ${error.message}`);
+  return (data as EssortSpanRow) ?? null;
+}
+
+/** Tâches permanentes et périodes ni faites ni retirées (d'une personne, ou de tous). */
+export async function listOpenSpans(person?: EssortPerson): Promise<EssortSpanRow[]> {
+  let query = supabase.from(SPANS).select().is('done_at', null).is('dismissed_at', null);
+  if (person) query = query.eq('person', person);
+  const { data, error } = await query.order('id', { ascending: true });
+  if (error) throw new Error(`listOpenSpans: ${error.message}`);
+  return (data ?? []) as EssortSpanRow[];
+}
+
+/** Les lignes d'une tâche permanente ou d'une période, du jour le plus récent au plus ancien. */
+export async function listSpanRows(spanId: number): Promise<TaskWithBoard[]> {
+  const { data, error } = await supabase
+    .from(TASKS)
+    .select('*, essort_boards!inner(person, board_date)')
+    .eq('span_id', spanId)
+    .is('dismissed_at', null);
+  if (error) throw new Error(`listSpanRows: ${error.message}`);
+  return ((data ?? []) as TaskWithBoard[]).sort((a, b) =>
+    b.essort_boards.board_date.localeCompare(a.essort_boards.board_date),
   );
 }

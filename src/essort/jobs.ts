@@ -6,6 +6,7 @@ import { hasFiredToday, withRetries } from '../daily/jobs';
 import { onRemindersChanged } from '../lib/reminderEvents';
 import {
   askCarryOver,
+  askEndedSpans,
   publishBoards,
   refreshForUser,
   restoreTodayPings,
@@ -19,6 +20,7 @@ import {
  * 5 minutes : un changement dans le CRM met à jour ces messages et le bot dit
  * ce qu'il a compris. À 19h, s'il reste des tâches,
  * le bot demande lesquelles reporter au lendemain (rien n'est reporté seul).
+ * À la fin d'une tâche sur une période, il demande si elle a pu être faite.
  *
  * Le rendez-vous passe aussi par la base Supabase chaque matin : il la garde
  * éveillée, alors qu'elle se mettait en pause faute d'activité.
@@ -28,6 +30,7 @@ export function startEssortJobs(client: Client): void {
     [config.ESSORT_CRON, 'ESSORT_CRON'],
     [config.ESSORT_SYNC_CRON, 'ESSORT_SYNC_CRON'],
     [config.ESSORT_EVENING_CRON, 'ESSORT_EVENING_CRON'],
+    [config.ESSORT_SPAN_CRON, 'ESSORT_SPAN_CRON'],
   ] as const) {
     if (!cron.validate(expr)) {
       logger.error({ expr, label }, 'expression cron invalide, tableaux Essort non planifies');
@@ -60,11 +63,24 @@ export function startEssortJobs(client: Client): void {
     { timezone: config.TIMEZONE },
   );
 
+  // Fin d'une période : la question part dans la minute (aussi après un
+  // redémarrage, pour celles finies pendant que le bot était arrêté).
+  cron.schedule(
+    config.ESSORT_SPAN_CRON,
+    () => {
+      void askEndedSpans(client).catch((err) =>
+        logger.error({ err }, 'questions de fin de periode en echec'),
+      );
+    },
+    { timezone: config.TIMEZONE },
+  );
+
   logger.info(
     {
       cron: config.ESSORT_CRON,
       sync: config.ESSORT_SYNC_CRON,
       evening: config.ESSORT_EVENING_CRON,
+      spans: config.ESSORT_SPAN_CRON,
       tz: config.TIMEZONE,
       people: essortMembers.map((m) => m.person),
     },

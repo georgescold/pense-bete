@@ -131,7 +131,8 @@ export function wantedEvents(
   // que l'événement reste le même quand l'action devient une tâche du jour.
   for (const t of tasks) {
     const date = t.essort_boards.board_date;
-    if (t.dismissed_at || !inWindow(date)) continue;
+    // Une tâche permanente ou une période n'est pas un rendez-vous : pas d'agenda.
+    if (t.dismissed_at || t.span_id || !inWindow(date)) continue;
     const crmKey =
       t.source === 'airtable' && t.record_id && t.signature
         ? `${t.record_id}|${t.signature}`
