@@ -44,6 +44,7 @@ import {
   duplicatesCrm,
   padDate,
   pingPlan,
+  restatesPastAction,
   untilText,
   WEEK_DAYS,
   type Agenda,
@@ -223,6 +224,12 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
     }
 
     if (history.some((t) => t.signature === due.signature && t.board_id !== board.id)) continue;
+
+    // Seule l'Action a changé sur un jour passé déjà traité (« R2 » devenu
+    // « Attente de doc ») : un statut, pas une chose à faire.
+    const action = { recordId: due.recordId, signature: due.signature, date: due.dueDate };
+    const before = history.filter((t) => t.board_id !== board.id);
+    if (restatesPastAction(action, before, board.board_date)) continue;
 
     // Même lead, autre action ou autre date : on met la tâche à jour sur place
     // plutôt que d'en empiler une seconde. Pas celle d'une autre étape du lead
@@ -650,7 +657,7 @@ export async function syncFromCrm(client: Client): Promise<void> {
             (t) => t.source === 'manual',
           )
         : [];
-      const changes = (previous ? changedActions(previous.actions, plan.actions) : []).filter(
+      const candidates = (previous ? changedActions(previous.actions, plan.actions) : []).filter(
         (a) =>
           !written.some(
             (t) =>
@@ -658,6 +665,16 @@ export async function syncFromCrm(client: Client): Promise<void> {
               duplicatesCrm({ label: t.label, time: t.due_time }, a),
           ),
       );
+      // Un simple changement de statut sur un jour passé déjà traité ne s'annonce pas.
+      const handled =
+        candidates.length > 0
+          ? await listAirtableTasksFor([...new Set(candidates.map((a) => a.key.split('|')[0]!))])
+          : [];
+      const changes = candidates.filter((a) => {
+        const [recordId, ...rest] = a.key.split('|');
+        const action = { recordId: recordId!, signature: rest.join('|'), date: a.date };
+        return !restatesPastAction(action, handled, date);
+      });
       lastSeen.set(m.person, {
         fingerprint,
         actions: new Map(plan.actions.map((a) => [a.key, a])),

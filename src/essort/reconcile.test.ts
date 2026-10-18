@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EssortBoardRow, EssortTaskRow } from '../db/essortRepository';
 import type { Lead } from './airtable';
-import { buildAgenda } from './planner';
+import { buildAgenda, restatesPastAction } from './planner';
 
 // Base en mémoire à la place de Supabase.
 const store = vi.hoisted(() => ({ tasks: [] as EssortTaskRow[], nextId: 1 }));
@@ -112,5 +112,57 @@ describe('action du CRM couverte par une tâche écrite à la main', () => {
     await reconcile(board(14, '2026-10-14'), buildAgenda([agathe], '2026-10-14'));
     await reconcile(board(15, '2026-10-15'), buildAgenda([agathe], '2026-10-15'));
     expect(visible(15)).toEqual([]);
+  });
+});
+
+describe('seule l’Action change dans le CRM, sur un jour passé', () => {
+  const sophie: Lead = { ...agathe, id: 'recSophie', nom: 'Sophie Garnier', dateAction: '2026-10-16' };
+
+  beforeEach(() => {
+    store.tasks = [];
+    store.nextId = 1;
+  });
+
+  it('« R2 » devenu « Attente de doc » sans nouvelle date : rien ne revient', async () => {
+    await reconcile(board(16, '2026-10-16'), buildAgenda([sophie], '2026-10-16'));
+    expect(visible(16)).toEqual(['R2 avec Sophie Garnier']);
+
+    const waiting = { ...sophie, action: 'Attente de doc' };
+    await reconcile(board(18, '2026-10-18'), buildAgenda([waiting], '2026-10-18'));
+    expect(visible(18)).toEqual([]);
+  });
+
+  it('une nouvelle date ramène le lead', async () => {
+    await reconcile(board(16, '2026-10-16'), buildAgenda([sophie], '2026-10-16'));
+    const later = { ...sophie, action: 'Attente de doc', dateAction: '2026-10-18' };
+    await reconcile(board(18, '2026-10-18'), buildAgenda([later], '2026-10-18'));
+    expect(visible(18)).toHaveLength(1);
+  });
+
+  it('une action passée jamais vue arrive toujours, en retard', async () => {
+    await reconcile(board(18, '2026-10-18'), buildAgenda([sophie], '2026-10-18'));
+    expect(visible(18)).toEqual(['R2 avec Sophie Garnier']);
+  });
+
+  it('ni annonce : seul un jour passé déjà traité sous une autre Action compte', () => {
+    const handled = [{ record_id: 'recSophie', signature: 'r2|2026-10-16' }];
+    const restated = {
+      recordId: 'recSophie',
+      signature: 'attente de doc|2026-10-16',
+      date: '2026-10-16',
+    };
+    expect(restatesPastAction(restated, handled, '2026-10-18')).toBe(true);
+    // Même jour qu'aujourd'hui, autre lead, autre jour : une vraie action.
+    expect(restatesPastAction(restated, handled, '2026-10-16')).toBe(false);
+    expect(restatesPastAction({ ...restated, recordId: 'recAutre' }, handled, '2026-10-18')).toBe(
+      false,
+    );
+    expect(
+      restatesPastAction(
+        { ...restated, signature: 'attente de doc|2026-10-15', date: '2026-10-15' },
+        handled,
+        '2026-10-18',
+      ),
+    ).toBe(false);
   });
 });
