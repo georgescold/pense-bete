@@ -40,6 +40,7 @@ import {
   buildEditModal,
   buildEditPickMenu,
   buildPeriodModal,
+  buildPlanForButtons,
   buildPermanentModal,
   buildPlanDayMenu,
   buildRemoveMenu,
@@ -267,12 +268,19 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
     case 'planday': {
       const select = interaction as StringSelectMenuInteraction;
       const date = select.values[0];
-      if (date === PLAN_PERMANENT) {
-        await select.showModal(buildPermanentModal(board.id));
-        return;
-      }
-      if (date === PLAN_PERIOD) {
-        await select.showModal(buildPeriodModal(board.id));
+      if (date === PLAN_PERMANENT || date === PLAN_PERIOD) {
+        // Une équipe : « Pour qui ? » d'abord (la personne du tableau, ou tous).
+        const team = essortMembers.map((m) => m.person);
+        if (team.length > 1) {
+          await select.update({
+            content: 'Pour qui ?',
+            components: [buildPlanForButtons(board, date, team)],
+          });
+        } else {
+          await select.showModal(
+            date === PLAN_PERMANENT ? buildPermanentModal(board.id) : buildPeriodModal(board.id),
+          );
+        }
         return;
       }
       if (!date || !ISO_DATE.test(date)) return;
@@ -280,7 +288,19 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
       return;
     }
 
-    // Une tâche de tous les jours, ou sur une période.
+    // `essort:planfor:<tableau>:<permanent|period>.<one|all>`
+    case 'planfor': {
+      const [kind, who] = (parsed.extra ?? '').split('.');
+      const shared = who === 'all';
+      await (interaction as ButtonInteraction).showModal(
+        kind === PLAN_PERMANENT
+          ? buildPermanentModal(board.id, shared)
+          : buildPeriodModal(board.id, shared),
+      );
+      return;
+    }
+
+    // Une tâche de tous les jours, ou sur une période (`…:all` : pour toute l'équipe).
     case 'permmodal':
     case 'periodmodal': {
       const modal = interaction as ModalSubmitInteraction;
@@ -301,6 +321,7 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
       await modal.deferUpdate();
       const span = await createSpan(modal.client, board, {
         kind: period ? 'period' : 'permanent',
+        shared: parsed.extra === 'all',
         label,
         start: period?.start ?? { date: essortToday(), time: null },
         end: period?.end ?? null,
