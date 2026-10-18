@@ -363,6 +363,33 @@ export function signatureOf(lead: Lead, date: string): string {
   return `${normalizeAction(lead.action) || 'none'}|${date}`;
 }
 
+/** Le jour d'une signature « action|AAAA-MM-JJ ». */
+function signatureDate(signature: string | null): string | null {
+  return signature?.split('|').at(-1) ?? null;
+}
+
+/**
+ * Une action échue dont le lead a déjà eu une tâche ce jour-là, sous une
+ * autre Action : seule l'Action a changé dans le CRM, pas la date (« R2 »
+ * devenu « Attente de doc » une fois le R2 passé). C'est un changement de
+ * statut, pas une chose à faire : ni tâche, ni annonce. Seule une nouvelle
+ * date ramène le lead.
+ * @param handled tâches déjà créées pour ce lead (faites, retirées ou laissées)
+ */
+export function restatesPastAction(
+  action: { recordId: string; signature: string; date: string },
+  handled: { record_id: string | null; signature: string | null }[],
+  today: string,
+): boolean {
+  if (action.date >= today) return false;
+  return handled.some(
+    (t) =>
+      t.record_id === action.recordId &&
+      t.signature !== action.signature &&
+      signatureDate(t.signature) === action.date,
+  );
+}
+
 /** Actions qui sont un rendez-vous fixé à une date. */
 const MEETING_KINDS: ReadonlySet<ActionKind> = new Set(['call', 'r1', 'r2']);
 
