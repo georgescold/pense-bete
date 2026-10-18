@@ -17,7 +17,7 @@ import type {
 } from '../db/essortRepository';
 import { truncate } from '../lib/format';
 import { addDays, compareTime, shortDate, WEEK_DAYS, weekdayName, type CrmAction } from './planner';
-import { DEFAULT_END_TIME, periodText } from './spans';
+import { DEFAULT_END_TIME, periodText, teamText } from './spans';
 
 /**
  * Deux messages par personne et par jour, dans cet ordre :
@@ -495,19 +495,41 @@ function momentValue(date: string, time: string | null): string {
 }
 
 /** Une tâche de tous les jours : le texte seulement. */
-export function buildPermanentModal(boardId: number): ModalBuilder {
+export function buildPermanentModal(boardId: number, shared = false): ModalBuilder {
   return new ModalBuilder()
-    .setCustomId(`essort:permmodal:${boardId}`)
-    .setTitle('Tâche de tous les jours')
+    .setCustomId(`essort:permmodal:${boardId}:${shared ? 'all' : 'one'}`)
+    .setTitle(shared ? 'Tous les jours · toute l’équipe' : 'Tâche de tous les jours')
     .addComponents(labelInput());
 }
 
 /** Une tâche sur une période : le texte, le début et la fin (jour et heure). */
-export function buildPeriodModal(boardId: number): ModalBuilder {
+export function buildPeriodModal(boardId: number, shared = false): ModalBuilder {
   return new ModalBuilder()
-    .setCustomId(`essort:periodmodal:${boardId}`)
-    .setTitle('Tâche sur une période')
+    .setCustomId(`essort:periodmodal:${boardId}:${shared ? 'all' : 'one'}`)
+    .setTitle(shared ? 'Période · toute l’équipe' : 'Tâche sur une période')
     .addComponents(labelInput(), momentInput('start'), momentInput('end'));
+}
+
+/**
+ * « Pour qui ? » avant le formulaire d'une tâche permanente ou d'une période :
+ * la personne du tableau seule, ou toute l'équipe (sur le tableau de chacun).
+ * @param kind 'permanent' ou 'period'
+ */
+export function buildPlanForButtons(
+  board: EssortBoardRow,
+  kind: string,
+  team: string[],
+): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`essort:planfor:${board.id}:${kind}.one`)
+      .setLabel(`Pour ${board.person}`)
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`essort:planfor:${board.id}:${kind}.all`)
+      .setLabel(`Pour ${team.join(' et ')}`)
+      .setStyle(ButtonStyle.Secondary),
+  );
 }
 
 /** Modifier une tâche permanente (son texte) ou une période (texte, début, fin). */
@@ -565,9 +587,9 @@ export function buildSpanReportModal(span: EssortSpanRow, today: string): ModalB
 
 /** Rappel de la période dans une réponse : « du lun. 12/10 09:00 au mer. 14/10 18:00 ». */
 export function spanWhen(span: EssortSpanRow): string {
-  return span.kind === 'permanent'
-    ? 'tous les jours, jusqu’à ce qu’elle soit faite'
-    : periodText(span);
+  const when =
+    span.kind === 'permanent' ? 'tous les jours, jusqu’à ce qu’elle soit faite' : periodText(span);
+  return span.shared ? `${when}, pour ${teamText()}` : when;
 }
 
 // ---------------------------------------------------------------------------

@@ -72,8 +72,11 @@ export type SpanKind = 'permanent' | 'period';
 
 export interface EssortSpanRow {
   id: number;
+  /** Le tableau où elle a été créée (et le salon de sa question de fin). */
   person: EssortPerson;
   channel_id: string;
+  /** Pour toute l'équipe : sur le tableau de chacun ; cochée par l'un, partie pour tous. */
+  shared: boolean;
   kind: SpanKind;
   label: string;
   /** 'YYYY-MM-DD' et 'HH:MM', heure de Paris. Sans heure : dès le début du jour. */
@@ -361,7 +364,7 @@ export async function listPlannedTasks(
 
 export async function addSpan(
   span: Pick<EssortSpanRow, 'person' | 'channel_id' | 'kind' | 'label' | 'start_date'> &
-    Partial<Pick<EssortSpanRow, 'start_time' | 'end_date' | 'end_time'>>,
+    Partial<Pick<EssortSpanRow, 'start_time' | 'end_date' | 'end_time' | 'shared'>>,
 ): Promise<EssortSpanRow> {
   const { data, error } = await supabase.from(SPANS).insert(span).select().single();
   if (error) throw new Error(`addSpan: ${error.message}`);
@@ -385,10 +388,13 @@ export async function updateSpan(id: number, patch: SpanPatch): Promise<EssortSp
   return (data as EssortSpanRow) ?? null;
 }
 
-/** Tâches permanentes et périodes ni faites ni retirées (d'une personne, ou de tous). */
+/**
+ * Tâches permanentes et périodes ni faites ni retirées : celles du tableau
+ * d'une personne (les siennes et celles de toute l'équipe), ou toutes.
+ */
 export async function listOpenSpans(person?: EssortPerson): Promise<EssortSpanRow[]> {
   let query = supabase.from(SPANS).select().is('done_at', null).is('dismissed_at', null);
-  if (person) query = query.eq('person', person);
+  if (person) query = query.or(`person.eq.${person},shared.eq.true`);
   const { data, error } = await query.order('id', { ascending: true });
   if (error) throw new Error(`listOpenSpans: ${error.message}`);
   return (data ?? []) as EssortSpanRow[];

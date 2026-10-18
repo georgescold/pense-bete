@@ -25,6 +25,7 @@ function span(partial: Partial<EssortSpanRow> = {}): EssortSpanRow {
     id: 5,
     person: 'Loys',
     channel_id: 'c',
+    shared: false,
     kind: 'period',
     label: 'Préparer la présentation',
     start_date: '2026-10-19',
@@ -115,6 +116,17 @@ describe('sur quels tableaux une tâche s’affiche', () => {
     expect(spanShowsOn({ ...s, done_at: 'x' }, '2026-10-20')).toBe(false);
     expect(spanShowsOn({ ...s, dismissed_at: 'x' }, '2026-10-20')).toBe(false);
     expect(spanDetails(s, '2026-10-20')).toBe('Tous les jours, jusqu’à ce qu’elle soit faite');
+  });
+
+  it('pour toute l’équipe : chacun voit avec qui elle est partagée', () => {
+    const s = span({ kind: 'permanent', shared: true, end_date: null, end_time: null });
+    expect(spanDetails(s, '2026-10-20', 'Loys')).toBe(
+      'Tous les jours, jusqu’à ce qu’elle soit faite · avec Enzo',
+    );
+    expect(spanDetails({ ...span(), shared: true }, '2026-10-21', 'Enzo')).toBe(
+      'Jusqu’à 18:00 · avec Loys',
+    );
+    expect(spanDetails(span(), '2026-10-21', 'Enzo')).toBe('Jusqu’à 18:00');
   });
 
   it('la semaine montre le début et la fin d’une période, rien d’une permanente', () => {

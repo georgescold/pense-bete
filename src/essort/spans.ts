@@ -1,6 +1,7 @@
+import type { EssortPerson } from '../config';
 import type { EssortSpanRow } from '../db/essortRepository';
 import { zonedWallClockToUtc } from '../lib/datetime';
-import { parseDayInput, shortDate, weekdayName } from './planner';
+import { parseDayInput, PEOPLE, shortDate, weekdayName } from './planner';
 
 /**
  * Tâches qui durent plus d'un jour, ajoutées depuis Discord :
@@ -103,13 +104,25 @@ export function momentText(date: string, time: string | null): string {
   return `${weekdayName(date, true)} ${shortDate(date)}${time ? ` ${time}` : ''}`;
 }
 
-/** La consigne sous la tâche, dans le message du jour. */
-export function spanDetails(span: EssortSpanRow, date: string): string {
-  if (span.kind === 'permanent') return 'Tous les jours, jusqu’à ce qu’elle soit faite';
+/**
+ * La consigne sous la tâche, dans le message du jour. Pour toute l'équipe,
+ * elle dit avec qui elle est partagée (vu du tableau de `person`).
+ */
+export function spanDetails(span: EssortSpanRow, date: string, person?: EssortPerson): string {
   const end = span.end_date ?? date;
-  return end === date
-    ? `Jusqu’à ${span.end_time}`
-    : `Jusqu’au ${weekdayName(end)} ${shortDate(end)}, ${span.end_time}`;
+  const when =
+    span.kind === 'permanent'
+      ? 'Tous les jours, jusqu’à ce qu’elle soit faite'
+      : end === date
+        ? `Jusqu’à ${span.end_time}`
+        : `Jusqu’au ${weekdayName(end)} ${shortDate(end)}, ${span.end_time}`;
+  const others = PEOPLE.filter((p) => p !== person);
+  return span.shared && others.length > 0 ? `${when} · avec ${others.join(' et ')}` : when;
+}
+
+/** « Loys et Enzo » : toute l'équipe. */
+export function teamText(): string {
+  return PEOPLE.join(' et ');
 }
 
 /** « du lun. 12/10 09:00 au mer. 14/10 18:00 » */

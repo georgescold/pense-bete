@@ -103,6 +103,7 @@ vi.mock('../db/essortRepository', () => {
     addSpan: async (span: Partial<EssortSpanRow>) => {
       const row = {
         id: db.nextId++,
+        shared: false,
         start_time: null,
         end_date: null,
         end_time: null,
@@ -125,7 +126,10 @@ vi.mock('../db/essortRepository', () => {
     },
     listOpenSpans: async (person?: string) =>
       db.spans.filter(
-        (s) => !s.done_at && !s.dismissed_at && (person === undefined || s.person === person),
+        (s) =>
+          !s.done_at &&
+          !s.dismissed_at &&
+          (person === undefined || s.person === person || s.shared),
       ),
     listSpanRows: async (spanId: number) =>
       db.tasks
@@ -189,9 +193,13 @@ const client = { channels: { fetch: async () => channel } } as unknown as Client
 /** Instant de Paris (heure d'été, UTC+2). */
 const paris = (date: string, time: string) => new Date(`${date}T${time}:00+02:00`);
 
-async function board(date: string, published = false): Promise<EssortBoardRow> {
+async function board(
+  date: string,
+  published = false,
+  person: EssortBoardRow['person'] = 'Loys',
+): Promise<EssortBoardRow> {
   const { ensureBoard } = await import('../db/essortRepository');
-  const { board: b } = await ensureBoard('Loys', date, 'salon-loys');
+  const { board: b } = await ensureBoard(person, date, `salon-${person.toLowerCase()}`);
   if (published) b.message_id = `jour-${date}`;
   return b;
 }
@@ -418,5 +426,86 @@ describe('tâche sur une période', () => {
     await answerSpan(client, span.id, 'drop', 'Loys', '');
     expect(db.spans[0]!.dismissed_at).not.toBeNull();
     expect(rowsOf(monday)).toEqual([]);
+  });
+});
+
+describe('tâche pour toute l’équipe', () => {
+  async function shared(kind: 'permanent' | 'period' = 'permanent') {
+    vi.setSystemTime(paris('2026-10-19', '08:00'));
+    const loys = await board('2026-10-19', true, 'Loys');
+    const enzo = await board('2026-10-19', true, 'Enzo');
+    const span = await createSpan(client, loys, {
+      kind,
+      shared: true,
+      label: 'Mettre à jour le CRM',
+      start: { date: '2026-10-19', time: null },
+      end: kind === 'period' ? { date: '2026-10-19', time: '17:00' } : null,
+    });
+    return { loys, enzo, span };
+  }
+
+  it('s’affiche sur le tableau de chacun, avec qui elle est partagée', async () => {
+    const { loys, enzo } = await shared();
+    expect(rowsOf(loys)).toMatchObject([
+      { details: 'Tous les jours, jusqu’à ce qu’elle soit faite · avec Enzo' },
+    ]);
+    expect(rowsOf(enzo)).toMatchObject([
+      { details: 'Tous les jours, jusqu’à ce qu’elle soit faite · avec Loys' },
+    ]);
+  });
+
+  it('cochée par l’un, elle part du tableau de l’autre ; décochée, elle revient', async () => {
+    const { loys, enzo } = await shared();
+    const mine = rowsOf(loys)[0]!;
+    await toggleTasks(client, loys, [mine.id], 'Loys');
+    expect(rowsOf(loys)[0]!.is_done).toBe(true);
+    expect(rowsOf(enzo)).toEqual([]);
+
+    await toggleTasks(client, loys, [mine.id], 'Loys');
+    expect(rowsOf(enzo)).toHaveLength(1);
+
+    // Cette fois Enzo la coche : elle part du tableau de Loys.
+    await toggleTasks(client, enzo, [rowsOf(enzo)[0]!.id], 'Enzo');
+    expect(rowsOf(enzo)[0]!.is_done).toBe(true);
+    expect(rowsOf(loys)).toEqual([]);
+
+    // Le lendemain, plus personne ne la voit.
+    vi.setSystemTime(paris('2026-10-20', '06:00'));
+    for (const person of ['Loys', 'Enzo'] as const) {
+      const next = await board('2026-10-20', false, person);
+      await placeSpans(next);
+      expect(rowsOf(next)).toEqual([]);
+    }
+  });
+
+  it('retirée par l’un, elle est retirée pour tous', async () => {
+    const { loys, enzo } = await shared();
+    await removeTasks(client, enzo, [rowsOf(enzo)[0]!.id]);
+    expect(rowsOf(enzo)).toEqual([]);
+    expect(rowsOf(loys)).toEqual([]);
+    expect(db.spans[0]!.dismissed_at).not.toBeNull();
+  });
+
+  it('modifiée par l’autre, les deux tableaux suivent', async () => {
+    const { loys, enzo, span } = await shared();
+    await editSpan(client, enzo, span.id, { label: 'Mettre à jour le CRM et le Sheet' });
+    expect(rowsOf(loys)[0]!.label).toBe('Mettre à jour le CRM et le Sheet');
+    expect(rowsOf(enzo)[0]!.label).toBe('Mettre à jour le CRM et le Sheet');
+  });
+
+  it('la question de fin tague chacun ; « Faite » coche la ligne de qui répond', async () => {
+    const { loys, enzo, span } = await shared('period');
+    vi.setSystemTime(paris('2026-10-19', '17:00'));
+    sent.length = 0;
+    await askEndedSpans(client);
+    expect(sent).toHaveLength(1);
+    const { essortMembers } = await import('../config');
+    for (const m of essortMembers.filter((x) => x.userId)) {
+      expect(sent[0]!.content).toContain(`<@${m.userId}>`);
+    }
+
+    await answerSpan(client, span.id, 'done', 'Enzo', sent[0]!.id);
+    expect(rowsOf(enzo)).toMatchObject([{ is_done: true, done_by: 'Enzo' }]);
+    expect(rowsOf(loys)).toEqual([]);
   });
 });
