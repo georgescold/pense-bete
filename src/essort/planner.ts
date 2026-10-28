@@ -3,6 +3,10 @@ import type { Lead } from './airtable';
 
 /**
  * Transforme les leads Airtable en agenda par personne : le jour et la semaine.
+ * Depuis le 28/10/2026 le bot lit le CRM (`crm.ts`, `buildCrmAgenda`) : seuls
+ * les outils communs de ce fichier servent encore (pings, doublons, saisie d'un
+ * jour ou d'une heure) ; la lecture des textes d'Airtable attend l'accord de
+ * Loys pour partir.
  *
  * Fonctions pures (aucun accès réseau ni base) : tout se teste avec des
  * leads fabriqués et une date « aujourd'hui » imposée.
@@ -576,7 +580,7 @@ export interface UpcomingItem {
 
 /** Une action lue dans le CRM, quelle que soit sa date. */
 export interface CrmAction {
-  /** Lead + action + date : la même clé tant que rien ne change dans Airtable. */
+  /** Lead + action + date : la même clé tant que rien ne change dans le CRM. */
   key: string;
   date: string;
   time: string | null;
@@ -584,6 +588,8 @@ export interface CrmAction {
   match: CrmMatch;
   /** La consigne et le téléphone, comme sous la tâche du jour. */
   details?: string;
+  /** Durée d'une tâche du calendrier du CRM, pour l'agenda Google (sinon ESSORT_EVENT_MINUTES). */
+  minutes?: number;
 }
 
 export interface PersonAgenda {

@@ -3,7 +3,7 @@ import type { CrmMatch } from '../essort/planner';
 import { supabase } from './supabase';
 
 export interface BoardExtras {
-  /** Actions Airtable des 6 jours suivants (planning de la semaine). */
+  /** Actions du CRM des 6 jours suivants (planning de la semaine). */
   upcoming?: {
     key?: string;
     date: string;
@@ -12,8 +12,8 @@ export interface BoardExtras {
     match?: CrmMatch;
     details?: string;
   }[];
-  /** Dernière lecture d'Airtable en échec : la liste est incomplète. */
-  airtableError?: boolean;
+  /** Dernière lecture du CRM en échec : la liste est incomplète. */
+  crmError?: boolean;
 }
 
 export interface EssortBoardRow {
@@ -273,8 +273,9 @@ export async function deleteTask(id: number): Promise<void> {
 }
 
 /**
- * Toutes les tâches Airtable déjà créées pour ces leads, tous jours et tous
- * états confondus : faites, retirées, ou laissées sans report sur leur jour.
+ * Toutes les tâches du CRM déjà créées pour ces fiches ou tâches (source
+ * `airtable`, nom d'avant le passage au CRM), tous jours et tous états
+ * confondus : faites, retirées, ou laissées sans report sur leur jour.
  */
 export async function listAirtableTasksFor(recordIds: string[]): Promise<EssortTaskRow[]> {
   if (recordIds.length === 0) return [];

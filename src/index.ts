@@ -108,7 +108,7 @@ async function main(): Promise<void> {
     if (essortEnabled) {
       startEssortJobs(client);
     } else {
-      logger.info('tableaux Essort désactivés (AIRTABLE_TOKEN ou salons ESSORT_* absents)');
+      logger.info('tableaux Essort désactivés (CRM_SECRET ou salons ESSORT_* absents)');
     }
   });
 

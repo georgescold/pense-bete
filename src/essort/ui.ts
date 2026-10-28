@@ -166,9 +166,9 @@ export function buildDayEmbed(
       value: truncate(reminders.map((r) => `- ${timed(r.time, r.label)}`).join('\n'), FIELD_BUDGET),
     });
   }
-  if (board.extras?.airtableError && !archived) {
+  if (board.extras?.crmError && !archived) {
     embed.addFields({
-      name: '⚠️ Airtable injoignable',
+      name: '⚠️ CRM injoignable',
       value: 'La liste peut être incomplète, nouvelle lecture à la prochaine actualisation.',
     });
   }
@@ -265,7 +265,7 @@ export function buildRemoveMenu(
               t.span_id
                 ? 'Retirée aussi des jours suivants'
                 : t.source === 'airtable'
-                  ? 'Ne reviendra pas tant que le lead ne change pas dans Airtable'
+                  ? 'Ne reviendra pas tant que la fiche ne change pas dans le CRM'
                   : 'Ajoutée à la main',
             ),
         ),

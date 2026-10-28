@@ -151,7 +151,10 @@ vi.mock('../lib/calendar', () => ({
   listEvents: async () => [],
   updateEvent: async () => undefined,
 }));
-vi.mock('./airtable', () => ({ fetchLeads: async () => [], recordUrl: (id: string) => id }));
+vi.mock('./crm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./crm')>()),
+  fetchCrm: async () => ({ actions: [], taches: [] }),
+}));
 
 const service = await import('./service');
 const {

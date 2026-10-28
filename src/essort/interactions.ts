@@ -436,7 +436,7 @@ export async function handleEssortInteraction(interaction: Interaction): Promise
       if (items.length === 0) {
         await interaction.reply({
           content: fromWeek
-            ? 'Aucune tâche planifiée sur les jours à venir. Les actions du CRM se modifient dans Airtable.'
+            ? 'Aucune tâche planifiée sur les jours à venir. Les actions du CRM se modifient dans le CRM.'
             : 'Aucune tâche à modifier aujourd’hui.',
           flags: MessageFlags.Ephemeral,
         });

@@ -61,10 +61,11 @@ npm run dev               # tsx watch
 | `SUPABASE_SERVICE_ROLE_KEY` | service_role key (bypass RLS) |
 | `TIMEZONE` | par défaut `Europe/Paris` |
 | `LOG_LEVEL` | par défaut `info` |
-| `AIRTABLE_TOKEN` | (Essort) token Airtable en **lecture seule** (`data.records:read`) |
-| `AIRTABLE_BASE_ID` / `AIRTABLE_LEADS_TABLE` | (Essort) par défaut la base et la table « Leads » d'Essort |
+| `CRM_SECRET` | (Essort) secret de la route `/api/pense-bete/agenda` du CRM, **lecture seule** ; la même valeur que `PENSE_BETE_SECRET` du projet Vercel essort-crm. Sans lui, pas de tableaux |
+| `CRM_URL` | (Essort) par défaut `https://crm.essort.agency` |
+| `AIRTABLE_TOKEN` / `AIRTABLE_BASE_ID` / `AIRTABLE_LEADS_TABLE` | (ancienne source, plus lue depuis le 28/10/2026) |
 | `ESSORT_CRON` | (Essort) par défaut `0 6 * * *` (6h, heure de Paris) |
-| `ESSORT_SYNC_CRON` | (Essort) synchro avec le CRM, par défaut `*/5 * * * *` (toutes les 5 minutes) |
+| `ESSORT_SYNC_CRON` | (Essort) synchro avec le CRM et la base, par défaut `*/5 * * * *` (toutes les 5 minutes) |
 | `ESSORT_EVENING_CRON` | (Essort) question « reporter à demain ? », par défaut `0 19 * * *` (19h) |
 | `ESSORT_LOYS_CHANNEL_ID` / `ESSORT_ENZO_CHANNEL_ID` | (Essort) salon de chaque tableau ; sans salon, pas de tableau |
 | `ESSORT_LOYS_USER_ID` / `ESSORT_ENZO_USER_ID` | (Essort) pour mentionner la personne et réserver les boutons à l'équipe |
@@ -136,16 +137,48 @@ concernés (ils se redéclenchent d'eux-mêmes).
 - `le dernier jour du mois à 18h`
 - `toutes les 30 minutes`, `toutes les 2 heures`
 
-## Essort : tâches commerciales du CRM Airtable
+## Essort : rendez-vous et tâches du CRM
 
-Chaque jour à 6h, le bot lit la table « Leads » d'Airtable (**sans jamais y écrire**) et poste
-deux messages dans le salon de chaque personne (champ **Gestion** : Loys ou Enzo). Il relit
-Airtable toutes les 5 minutes : dès qu'une action change dans le CRM (après un rendez-vous client,
+Depuis le 28/10/2026 le bot lit le **CRM** (crm.essort.agency, espace « ESSORT · Leads du site »)
+et non plus la table « Leads » d'Airtable, qui n'est plus tenue à jour.
+
+Chaque jour à 6h, le bot lit le CRM (**sans jamais y écrire**) et poste deux messages dans le salon
+de chaque personne (le **responsable** de la fiche ou de la tâche : Loys ou Enzo). Il relit le CRM
+toutes les 5 minutes : dès qu'une action change dans le CRM (après un rendez-vous client,
 notamment), les messages sont mis à jour sans nouvelle mention et le bot écrit en une ligne ce
-qu'il a compris (« Agenda mis à jour depuis le CRM : - Mardi 13/10 · `14:00` R2 avec … »).
+qu'il a compris (« Agenda mis à jour depuis le CRM : - Mardi 13/10 · `14:00` R2 avec … »). Au même
+rythme, une tâche posée **directement dans la base du bot** (`essort_tasks`, par une autre session
+ou un script) apparaît sur le tableau et sonne, sans « 🔄 Actualiser ».
 
-**📅 Ta semaine** — les 6 jours suivants (pas aujourd'hui) : actions Airtable, tâches planifiées,
-rappels, chacun à son heure.
+**Lecture du CRM** : une seule route, `GET /api/pense-bete/agenda` (`crm/app/api/pense-bete/agenda/route.ts`),
+protégée par `CRM_SECRET` ; elle lit la base dans une transaction `read only`. Elle renvoie :
+- la **prochaine action** de chaque fiche : `next_action_at` (jour et heure de Paris ; minuit = un
+  jour sans heure, comme le calendrier du CRM) et `next_action_label` ; ni les fiches perdues ni
+  les tests. La personne est le dernier événement `assignation` de la fiche ;
+- les **tâches du calendrier** pas encore faites (table `taches` : `debut`, `duree_minutes`,
+  `journee`, `responsable`, `lead_id`), sur le tableau de leur responsable.
+
+Sans responsable (une tâche « Personne », une fiche jamais attribuée) : le seul prénom de l'équipe
+cité dans le texte (« R1 · Enzo appelle Lucie »), sinon **les deux tableaux** (chacun la coche ou la
+retire de son côté). Un autre prénom : aucun tableau. Le libellé est celui du CRM, complété du nom
+du lead s'il ne le cite pas (« Appel · Camille Dubreuil ») ; sans libellé, l'étape (« R1 », « Relance »).
+Dessous : le cabinet, la note d'une tâche, le téléphone s'il faut appeler (et qu'il n'est pas déjà
+dans le libellé). Une action **en retard** arrive sur le jour **sans heure** (« en retard, prévu le
+16/10 à 16:00 ») : l'heure d'un jour passé sonnerait pour rien. ⚠️ Le CRM propose 10 h par défaut
+pour une relance : une relance à venir laissée à 10 h sonne donc à 9 h, 9 h 30 et 9 h 50.
+
+Pour voir ce que le bot posera, sans rien écrire (ni Discord, ni base) :
+
+```bash
+npm run apercu-crm      # CRM_URL et CRM_SECRET du .env
+```
+
+En base, une tâche venue du CRM garde la source `airtable` (nom d'avant le passage au CRM) et
+l'identifiant `lead:<fiche>` ou `tache:<tâche>` (suivi de `@loys` / `@enzo` quand elle est posée sur
+les deux tableaux).
+
+**📅 Ta semaine** : les 6 jours suivants (pas aujourd'hui) : actions et tâches du CRM, tâches
+planifiées, rappels, chacun à son heure.
 - **➕ Planifier** : un jour (d'aujourd'hui à J+24), une tâche, une heure facultative.
 - **✏️ Modifier** : une tâche posée sur un jour à venir, ou une action du CRM de la semaine (pour
   lui ajouter une heure, la changer de jour…) : texte, jour, heure, formulaire prérempli. L'action
@@ -154,59 +187,51 @@ rappels, chacun à son heure.
 - **🗑️ Retirer** : une tâche planifiée sur un jour à venir.
 - **⏰ Rappels** : la liste de ses rappels ; ➕ en créer un (même formulaire que `/rappel ajouter`),
   ou en choisir un pour le mettre en pause, le réactiver ou le supprimer.
-- **🔄 Actualiser** : relit Airtable tout de suite.
+- **🔄 Actualiser** : relit le CRM tout de suite.
 
-**☀️ Aujourd'hui** — avec mention, seulement ce qu'il y a à faire : la tâche, son heure, la
-consigne (« Prochain événement ») et le téléphone. Les rappels du jour sont listés dessous.
+**☀️ Aujourd'hui** : avec mention, seulement ce qu'il y a à faire : la tâche, son heure, le
+cabinet ou la note, et le téléphone. Les rappels du jour sont listés dessous.
 - **✔️ n** valide une tâche : elle part aussitôt dans l'onglet « Essort » du Google Sheet
   (décocher efface la ligne).
 - **➕ Ajouter** (heure facultative), **✏️ Modifier** (texte, jour — « demain », « lundi », « 12/10 » —
   et heure ; changer de jour déplace la tâche, changer d'heure reprogramme ses pings), **🗑️ Retirer**
-  n'importe quelle tâche. Une tâche du CRM modifiée ici garde la modification tant que l'action ou
-  sa date ne changent pas dans Airtable. Une tâche Airtable
-  retirée ou validée ne revient pas tant que sa date ou son action ne changent pas dans Airtable.
+  n'importe quelle tâche. Une tâche du CRM modifiée ici garde la modification tant que son libellé
+  ou sa date ne changent pas dans le CRM. Une tâche du CRM retirée ou validée ici ne revient pas tant
+  que son libellé ou sa date ne changent pas dans le CRM (le bot n'écrit rien dans le CRM : la cocher
+  sur Discord ne la coche pas dans le CRM).
 - **Rien n'est reporté automatiquement.** À 19h, s'il reste des tâches non faites, le bot
   tague la personne et demande lesquelles passer au lendemain : un bouton numéroté par tâche
   (un clic la reporte, un second annule, autant qu'on veut), puis « Terminé », ou « Tout
   reporter ». La question suit le tableau : une tâche cochée après 19h en disparaît, et une tâche
   reportée reste visible dans le message du jour sous « Reporté à demain ». Sans réponse, rien ne
   bouge : les tâches restent affichées sur leur
-  jour, non faites. Une action Airtable non reportée ne revient que si sa date ou son action
-  changent dans Airtable.
+  jour, non faites. Une action du CRM non reportée ne revient que si sa date ou son libellé
+  changent dans le CRM.
 - Une tâche à heure fixe (rendez-vous du CRM, tâche ajoutée avec une heure) déclenche trois pings :
   1 h, 30 min et 10 min avant (« ⏰ 14:00 (dans 30 min) · R2 avec… »). Après un redémarrage ou un
   ajout tardif, un seul ping rattrape ceux qui sont passés, avec le temps qui reste.
 
-Lecture d'Airtable : la personne est *Gestion* (vide : le prénom de l'équipe cité dans le texte).
-La date est *date de la prochaine action*, à défaut la première date à venir écrite dans
-*Prochain événement* (« jeudi 08/10 », « fin octobre »…) ; l'heure vient de ce texte (« à 11h »)
-s'il parle du même jour. Un texte à plusieurs dates n'est lu que pour la date de l'action ; un
-texte qui ne raconte que le passé est ignoré. Si *Action* décrit un état (« Attente de doc »,
-« A relancer ») et que le texte dit quoi faire (« appel », « rappeler », « R2 »), c'est le texte
-qui nomme la tâche. Un rendez-vous « doc à préparer » amène « Préparer le R2 » le jour ouvré
-d'avant.
-
-**Pas de doublon** : une tâche écrite à la main l'emporte sur l'action du CRM qui dit la même
-chose (même jour, nom du lead ou de son cabinet dans le texte, et même heure à 15 min près, ou deux
-rendez-vous « rdv / visio / appel » dont l'un n'a pas d'heure). L'action du CRM n'est alors ni
-ajoutée, ni montrée dans la semaine, ni annoncée, et ne sonne pas. Le libellé dépend de l'*Action* (a call, R1, R2, à
-relancer…), les leads `dead` sont ignorés. Bot redémarré après 6h (ou 19h) : ce qui manque est publié au
-démarrage, les pings du jour sont reprogrammés.
+**Pas de doublon** : une tâche écrite à la main (sur Discord, ou posée en base) l'emporte sur l'action
+du CRM qui dit la même chose (même jour, nom du lead ou de son cabinet dans le texte, et même heure à
+15 min près, ou deux rendez-vous « rdv / visio / appel » dont l'un n'a pas d'heure). L'action du CRM
+n'est alors ni ajoutée, ni montrée dans la semaine, ni annoncée, et ne sonne pas. Les fiches perdues
+sont ignorées. Bot redémarré après 6h (ou 19h) : ce qui manque est publié au démarrage, les pings du
+jour sont reprogrammés.
 
 ### Agenda Google
 
 Si `GOOGLE_CALENDAR_ID` est défini, l'agenda Google suit le planning : chaque rendez-vous **à heure
-fixe** (action du CRM qui a une heure, tâche posée sur Discord avec une heure) y devient un
-événement d'une heure, « R2 avec … · Enzo », avec la consigne, le téléphone et la fiche Airtable en
-description. Un **rendez-vous client sans heure** (appel, R1, R2 du CRM, tâche Discord « rdv … ») attend
-dans le bandeau « toute la journée » de son jour (« … · heure à fixer ») et passe sur son créneau dès
-que l'heure est écrite ; les préparations, relances et envois de documents sans heure n'y vont pas.
-Un changement sur Discord passe aussitôt ; un changement dans Airtable, à la relecture
-suivante (5 minutes au plus). Une tâche retirée sur Discord, une action déplacée ou passée à `dead`
-dans Airtable : l'événement est déplacé ou supprimé.
+fixe** (action ou tâche du CRM qui a une heure, tâche posée sur Discord avec une heure) y devient un
+événement d'une heure (une tâche du calendrier du CRM : sa durée), « R1 · Enzo appelle … · Enzo »,
+avec le détail et le lien de la fiche du CRM en description. Un **rendez-vous client sans heure**
+(appel, R1, R2 du CRM, tâche Discord « rdv … ») attend dans le bandeau « toute la journée » de son
+jour (« … · heure à fixer ») et passe sur son créneau dès que l'heure est écrite ; les préparations,
+relances et envois de documents sans heure n'y vont pas. Un changement sur Discord passe aussitôt ;
+un changement dans le CRM, à la relecture suivante (5 minutes au plus). Une tâche retirée sur
+Discord, une action déplacée dans le CRM ou une fiche perdue : l'événement est déplacé ou supprimé.
 
-- **Sens unique** : ce qui est changé dans l'agenda ne remonte ni dans Airtable ni sur Discord, et
-  la relecture suivante remet l'événement du bot comme le dit le CRM. On modifie dans Airtable ou sur
+- **Sens unique** : ce qui est changé dans l'agenda ne remonte ni dans le CRM ni sur Discord, et
+  la relecture suivante remet l'événement du bot comme le dit le CRM. On modifie dans le CRM ou sur
   Discord.
 - Le bot ne touche **qu'à ses événements** (clé privée `essortKey`), d'aujourd'hui à 90 jours : les
   jours passés et les événements écrits à la main ne sont jamais modifiés.
@@ -245,10 +270,11 @@ src/
 │   ├── scheduler.ts      # Map<id, job> + node-cron + long-timeout
 │   └── trigger.ts        # Envoi du rappel + update next_run_at
 ├── essort/
-│   ├── airtable.ts       # Lecture seule du CRM (GET uniquement)
+│   ├── crm.ts            # Lecture seule du CRM (une route, GET) → agenda par personne (pur)
+│   ├── airtable.ts       # Ancienne lecture d'Airtable, plus appelée (à retirer avec l'accord de Loys)
 │   ├── calendarSync.ts   # Rendez-vous à heure fixe → agenda Google (sens unique)
-│   ├── planner.ts        # Leads → tâches du jour et de la semaine, dates et heures (pur)
-│   ├── service.ts        # Messages semaine + jour, synchro Airtable, pings, Sheet
+│   ├── planner.ts        # Outils communs : pings, doublons, saisie d'un jour ou d'une heure (pur)
+│   ├── service.ts        # Messages semaine + jour, synchro CRM et base, pings, Sheet
 │   ├── ui.ts             # Embeds, boutons, menus
 │   ├── interactions.ts   # ✔️ ➕ 🗑️ 🔄 et planification
 │   └── jobs.ts           # 6h, relectures 12h/17h, rattrapage au démarrage
@@ -262,5 +288,6 @@ src/
 │   ├── googleAuth.ts     # Jeton Google d'un compte de service (Sheet, agenda)
 │   └── format.ts         # Format date FR
 └── scripts/
-    └── deploy-commands.ts
+    ├── deploy-commands.ts
+    └── apercu-crm.ts     # Ce que le bot posera d'après le CRM, sans rien écrire
 ```

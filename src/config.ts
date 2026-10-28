@@ -28,15 +28,20 @@ const schema = z.object({
   GOOGLE_SHEET_ID: z.string().optional(),
   GOOGLE_SERVICE_ACCOUNT_JSON: z.string().optional(),
 
-  // --- Essort : tâches commerciales lues dans le CRM Airtable ---
-  // Le bot ne fait que LIRE Airtable : token avec le seul scope data.records:read.
+  // --- Essort : rendez-vous et tâches lus dans le CRM (crm.essort.agency) ---
+  // Le bot ne fait que LIRE le CRM, par une seule route (GET
+  // /api/pense-bete/agenda) protégée par ce secret (PENSE_BETE_SECRET chez Vercel).
+  CRM_URL: z.string().url().default('https://crm.essort.agency'),
+  CRM_SECRET: z.string().optional(),
+  // Ancienne source (Airtable, table « Leads ») : plus lue depuis le 28/10/2026.
+  // `essort/airtable.ts` reste en place tant que Loys n'a pas accepté de le retirer.
   AIRTABLE_TOKEN: z.string().optional(),
   AIRTABLE_BASE_ID: z.string().default('appWdzyvFb3DaqPXk'),
   AIRTABLE_LEADS_TABLE: z.string().default('tblcpyeIaC9qJPOnJ'),
   ESSORT_CRON: z.string().default('0 6 * * *'),
-  // Synchro avec le CRM : Airtable est relu toutes les 5 minutes ; un
-  // changement met à jour les messages du jour (sans mention) et le bot dit
-  // en une ligne ce qu'il a compris.
+  // Synchro avec le CRM : relu toutes les 5 minutes ; un changement met à jour
+  // les messages du jour (sans mention) et le bot dit en une ligne ce qu'il a
+  // compris. Une tâche posée en base par une autre voie suit au même rythme.
   ESSORT_SYNC_CRON: z.string().default('*/5 * * * *'),
   // Le soir, le bot demande quelles tâches non faites passer au lendemain.
   // Rien n'est jamais reporté sans réponse.
@@ -80,7 +85,7 @@ export const dailyConfigured = Boolean(config.DAILY_CHANNEL_ID && config.DAILY_U
 /** Les journées de travail ne tournent que si elles sont configurées et pas en veille. */
 export const dailyEnabled = dailyConfigured && !config.DAILY_PAUSED;
 
-/** Valeurs possibles du champ « Gestion » d'Airtable : une personne = un tableau. */
+/** Les responsables possibles d'une fiche ou d'une tâche du CRM : une personne = un tableau. */
 export type EssortPerson = 'Loys' | 'Enzo';
 
 export interface EssortMember {
@@ -102,8 +107,8 @@ export const essortMembers: EssortMember[] = (
     userId: userId ?? null,
   }));
 
-/** Tableaux Essort : un token Airtable et au moins un salon. */
-export const essortEnabled = Boolean(config.AIRTABLE_TOKEN) && essortMembers.length > 0;
+/** Tableaux Essort : le secret du CRM et au moins un salon. */
+export const essortEnabled = Boolean(config.CRM_SECRET) && essortMembers.length > 0;
 
 // Diagnostic log on boot: confirm injected values are well-formed (no secret leak).
 const sk = config.SUPABASE_SERVICE_ROLE_KEY;
@@ -121,8 +126,8 @@ console.log(
   } sheets=${config.GOOGLE_SERVICE_ACCOUNT_JSON ? 'compte de service' : 'non configuré'} essort=${
     essortEnabled
       ? essortMembers.map((m) => m.person).join('+')
-      : config.AIRTABLE_TOKEN
+      : config.CRM_SECRET
         ? 'aucun salon'
-        : 'pas de token Airtable'
+        : 'pas de secret du CRM'
   } agenda=${config.GOOGLE_CALENDAR_ID ? config.GOOGLE_CALENDAR_ID : 'non configuré'}`,
 );

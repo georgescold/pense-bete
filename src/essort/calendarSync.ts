@@ -16,7 +16,7 @@ import {
 } from '../lib/calendar';
 import { zonedWallClockToUtc } from '../lib/datetime';
 import { logger } from '../logger';
-import { recordUrl } from './airtable';
+import { recordUrl } from './crm';
 import {
   addDays,
   duplicatesCrm,
@@ -86,6 +86,8 @@ export interface WantedEvent {
   recordId: string | null;
   /** Les mots qui désignent le lead, pour reconnaître un rendez-vous écrit à la main. */
   names: string[];
+  /** Durée d'une tâche du calendrier du CRM ; sinon la durée par défaut. */
+  minutes?: number;
 }
 
 function startOf(date: string, time: string): number {
@@ -152,6 +154,7 @@ export function wantedEvents(
       details: t.details,
       recordId: t.record_id,
       names: action?.match.names ?? taskWords(t.label),
+      ...(action?.minutes ? { minutes: action.minutes } : {}),
     });
   }
 
@@ -179,6 +182,7 @@ export function wantedEvents(
       details: a.details || null,
       recordId: a.key.split('|')[0] ?? null,
       names: a.match.names,
+      ...(a.minutes ? { minutes: a.minutes } : {}),
     });
   }
 
@@ -188,10 +192,11 @@ export function wantedEvents(
 }
 
 export function eventBody(w: WantedEvent, minutes: number): EventBody {
+  const link = w.recordId ? recordUrl(w.recordId) : '';
   const description = [
     w.details,
-    w.recordId ? `Fiche Airtable : ${recordUrl(w.recordId)}` : null,
-    `Écrit par le bot Essort (${w.person}) : à modifier dans Airtable ou sur Discord, pas ici.`,
+    link ? `Dans le CRM : ${link}` : null,
+    `Écrit par le bot Essort (${w.person}) : à modifier dans le CRM ou sur Discord, pas ici.`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -211,7 +216,10 @@ export function eventBody(w: WantedEvent, minutes: number): EventBody {
     summary: `${w.label} · ${w.person}`,
     description,
     start: { dateTime: new Date(start).toISOString(), timeZone: config.TIMEZONE },
-    end: { dateTime: new Date(start + minutes * 60_000).toISOString(), timeZone: config.TIMEZONE },
+    end: {
+      dateTime: new Date(start + (w.minutes ?? minutes) * 60_000).toISOString(),
+      timeZone: config.TIMEZONE,
+    },
     extendedProperties,
   };
 }

@@ -16,9 +16,9 @@ import {
 
 /**
  * Tous les jours à 6h (heure de Paris), dans le salon de chaque personne : le
- * planning de la semaine puis le message du jour. Airtable est relu toutes les
- * 5 minutes : un changement dans le CRM met à jour ces messages et le bot dit
- * ce qu'il a compris. À 19h, s'il reste des tâches,
+ * planning de la semaine puis le message du jour. Le CRM est relu toutes les
+ * 5 minutes : un changement dans le CRM (ou une tâche posée en base) met à
+ * jour ces messages et le bot dit ce qu'il a compris. À 19h, s'il reste des tâches,
  * le bot demande lesquelles reporter au lendemain (rien n'est reporté seul).
  * À la fin d'une tâche sur une période, il demande si elle a pu être faite.
  *

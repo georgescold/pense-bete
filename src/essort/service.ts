@@ -35,11 +35,10 @@ import { parisDateValue, zonedWallClockToUtc } from '../lib/datetime';
 import { expandOccurrences } from '../lib/embeds';
 import { appendRowsTo, clearRange, isSheetsConfigured } from '../lib/sheets';
 import { isCalendarConfigured } from '../lib/calendar';
-import { fetchLeads, recordUrl } from './airtable';
+import { buildCrmAgenda, fetchCrm, recordUrl } from './crm';
 import { followInCalendar } from './calendarSync';
 import {
   addDays,
-  buildAgenda,
   compareTime,
   duplicatesCrm,
   padDate,
@@ -100,7 +99,7 @@ async function fetchChannel(client: Client, channelId: string): Promise<Sendable
 }
 
 // ---------------------------------------------------------------------------
-// Verrou par tableau : deux clics rapprochés ne doivent pas lire Airtable et
+// Verrou par tableau : deux clics rapprochés ne doivent pas lire le CRM et
 // créer les mêmes tâches deux fois.
 // ---------------------------------------------------------------------------
 
@@ -118,7 +117,7 @@ function withBoardLock<T>(boardId: number, fn: () => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Lecture d'Airtable
+// Lecture du CRM
 // ---------------------------------------------------------------------------
 
 /** 3 essais sur ~40 s ; sur un clic, un seul : la personne attend. */
@@ -131,11 +130,11 @@ async function readAgenda(date: string, delays: number[]): Promise<Agenda | null
   for (const [attempt, delay] of delays.entries()) {
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     try {
-      const agenda = buildAgenda(await fetchLeads(), date);
+      const agenda = buildCrmAgenda(await fetchCrm(), date);
       if (date === essortToday()) lastAgenda = { date, agenda };
       return agenda;
     } catch (err) {
-      logger.warn({ err, attempt }, 'lecture Airtable impossible');
+      logger.warn({ err, attempt }, 'lecture du CRM impossible');
     }
   }
   return null;
@@ -150,19 +149,20 @@ function nextPosition(tasks: EssortTaskRow[]): number {
 }
 
 /**
- * Aligne les tâches Airtable du tableau sur l'agenda lu :
+ * Aligne les tâches du CRM sur le tableau (source `airtable` en base : nom
+ * historique, d'avant le passage au CRM) :
  *  - une action échue apparaît, une seule fois par lead et par action ;
  *  - une action déjà apparue un autre jour (faite, retirée, ou laissée sans
  *    report le soir) ne revient pas tant que sa date ou son action ne
- *    changent pas dans Airtable : rien ne passe au lendemain sans qu'on l'ait
+ *    changent pas dans le CRM : rien ne passe au lendemain sans qu'on l'ait
  *    demandé à 19h ;
- *  - une tâche non faite dont le lead n'est plus dû (date repoussée, lead
- *    mort) disparaît ;
+ *  - une tâche non faite dont le lead n'est plus dû (date repoussée, fiche
+ *    perdue, tâche faite dans le CRM) disparaît ;
  *  - les tâches faites et les tâches manuelles ne sont jamais touchées.
  */
 export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): Promise<void> {
   if (!agenda) {
-    await updateBoard(board.id, { extras: { ...board.extras, airtableError: true } });
+    await updateBoard(board.id, { extras: { ...board.extras, crmError: true } });
     return;
   }
 
@@ -279,7 +279,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
   }
 
   await updateBoard(board.id, {
-    extras: { upcoming: plan.upcoming, airtableError: false },
+    extras: { upcoming: plan.upcoming, crmError: false },
     read_at: new Date().toISOString(),
   });
 }
@@ -564,7 +564,7 @@ async function publishBoard(
 ): Promise<void> {
   const { board } = await ensureBoard(member.person, date, member.channelId);
   await withBoardLock(board.id, async () => {
-    // Les tableaux passés sont figés (sans boutons), puis Airtable ajoute ce
+    // Les tableaux passés sont figés (sans boutons), puis le CRM ajoute ce
     // qui est dû. Rien n'est repris de la veille : seul ce qui a été reporté
     // à 19h est déjà sur le tableau du jour.
     await archivePastBoards(client, member.person, date);
@@ -617,16 +617,45 @@ export function changedActions(previous: Map<string, CrmAction>, next: CrmAction
 }
 
 /**
- * Relit Airtable toutes les quelques minutes. Pour chaque personne dont
- * l'agenda a changé et dont le tableau du jour est déjà publié : met à jour
- * ses deux messages (sans mention) et dit en une ligne ce que le bot a compris
- * des actions ajoutées ou déplacées. Avant 6h, rien n'est publié : le tableau
- * du jour sera construit à l'heure, avec ces changements.
+ * Ce que montrent les deux messages d'un tableau, lu en base : les tâches du
+ * jour et des 6 suivants. Une tâche posée ou changée par une autre voie que
+ * le bot (une autre session, un script) change cette empreinte.
+ */
+async function boardState(board: EssortBoardRow): Promise<string> {
+  const tasks = await listPlannedTasks(
+    board.person,
+    board.board_date,
+    addDays(board.board_date, WEEK_DAYS),
+  );
+  return JSON.stringify(
+    tasks.map((t) => [
+      t.id,
+      t.essort_boards.board_date,
+      t.label,
+      t.details,
+      t.due_time,
+      t.is_done,
+      t.position,
+    ]),
+  );
+}
+
+/** Dernière empreinte de chaque tableau, après sa dernière mise à jour par la synchro. */
+const lastBoardState = new Map<number, string>();
+
+/**
+ * Relit le CRM toutes les 5 minutes. Pour chaque personne dont le tableau du
+ * jour est déjà publié, et dont l'agenda du CRM ou les tâches en base ont
+ * changé : met à jour ses deux messages (sans mention) et reprogramme les
+ * pings, puis dit en une ligne ce que le bot a compris des actions du CRM
+ * ajoutées ou déplacées. Une tâche du jour écrite en base apparaît et sonne
+ * ainsi sans « 🔄 Actualiser ». Avant 6h, rien n'est publié : le tableau du
+ * jour sera construit à l'heure, avec ces changements.
  */
 export async function syncFromCrm(client: Client): Promise<void> {
   const date = essortToday();
   const agenda = await readAgenda(date, [0]);
-  // Airtable injoignable : la prochaine synchro réessaiera.
+  // CRM injoignable : la prochaine synchro réessaiera.
   if (!agenda) return;
 
   for (const m of essortMembers) {
@@ -634,10 +663,13 @@ export async function syncFromCrm(client: Client): Promise<void> {
       const plan = agenda.people[m.person];
       const fingerprint = JSON.stringify(plan);
       const previous = lastSeen.get(m.person);
-      if (previous?.fingerprint === fingerprint) continue;
+      const crmChanged = previous?.fingerprint !== fingerprint;
 
       const board = await getBoard(m.person, date);
       if (!board?.message_id || board.archived_at) continue;
+      const tasksChanged = lastBoardState.get(board.id) !== (await boardState(board));
+      if (!crmChanged && !tasksChanged) continue;
+
       await withBoardLock(board.id, async () => {
         await reconcile((await getBoardById(board.id)) ?? board, agenda);
         await pruneFutureCrmTasks(m.person, date, agenda);
@@ -649,7 +681,9 @@ export async function syncFromCrm(client: Client): Promise<void> {
         if (fresh?.evening_message_id && !fresh.evening_answered_at) {
           await renderEvening(client, fresh);
         }
+        lastBoardState.set(board.id, await boardState(fresh ?? board));
       });
+      if (!crmChanged) continue;
 
       // Au premier passage après un démarrage, rien à comparer : on retient.
       // Ce qui est déjà au planning (écrit à la main) n'est pas annoncé.
@@ -781,7 +815,7 @@ export async function planTask(
  * Modifie une tâche (texte, jour, heure) et renvoie son nouvel intitulé, ou
  * null si elle n'existe plus. Changer de jour la déplace sur le tableau de ce
  * jour ; changer d'heure reprogramme ses pings. Une tâche venue du CRM garde
- * la modification tant que l'action ou sa date ne changent pas dans Airtable.
+ * la modification tant que l'action ou sa date ne changent pas dans le CRM.
  */
 export function editTask(
   client: Client,
@@ -824,7 +858,7 @@ export function editTask(
 
 /**
  * Retire une tâche. Une tâche ajoutée à la main est supprimée ; une tâche
- * Airtable est seulement masquée, pour ne pas revenir aux relectures tant que
+ * du CRM est seulement masquée, pour ne pas revenir aux relectures tant que
  * l'action ou la date du lead ne changent pas. Une ligne déjà écrite dans le
  * Sheet est effacée.
  */
@@ -1543,7 +1577,7 @@ const SHEET_HEADER = [
   'Origine',
   'Faite à',
   'Validée par',
-  'Fiche Airtable',
+  'Fiche CRM',
 ];
 /** Ligne écrite mais plage non renvoyée par Google : on ne saura pas l'effacer. */
 const UNKNOWN_RANGE = '?';
@@ -1565,7 +1599,7 @@ function taskToRow(task: TaskWithBoard): string[] {
     formatPlanDate(date).split(' ')[0] ?? '',
     task.essort_boards.person,
     task.due_time ? `${task.due_time} · ${task.label}` : task.label,
-    task.source === 'airtable' ? 'Airtable' : 'Ajoutée',
+    task.source === 'airtable' ? 'CRM' : 'Ajoutée',
     task.done_at
       ? new Date(task.done_at).toLocaleTimeString('fr-FR', {
           hour: '2-digit',
