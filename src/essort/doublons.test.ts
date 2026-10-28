@@ -41,9 +41,9 @@ describe('doublons entre le CRM et le planning écrit à la main', () => {
 
   it('deux actions différentes du même lead restent deux tâches', () => {
     const crm = rdv(['agathe', 'morel'], null);
-    expect(duplicatesCrm({ label: 'Envoyer doc R2 par mail à Agathe Morel', time: null }, crm)).toBe(
-      false,
-    );
+    expect(
+      duplicatesCrm({ label: 'Envoyer doc R2 par mail à Agathe Morel', time: null }, crm),
+    ).toBe(false);
     // Deux heures différentes : deux moments distincts.
     expect(
       duplicatesCrm(
@@ -55,10 +55,7 @@ describe('doublons entre le CRM et le planning écrit à la main', () => {
 
   it('un autre lead n’est jamais un doublon', () => {
     expect(
-      duplicatesCrm(
-        { label: 'rdv avec Paul', time: '10:30' },
-        rdv(['margaux', 'lefort'], '10:30'),
-      ),
+      duplicatesCrm({ label: 'rdv avec Paul', time: '10:30' }, rdv(['margaux', 'lefort'], '10:30')),
     ).toBe(false);
   });
 

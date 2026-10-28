@@ -116,7 +116,12 @@ describe('action du CRM couverte par une tâche écrite à la main', () => {
 });
 
 describe('seule l’Action change dans le CRM, sur un jour passé', () => {
-  const sophie: Lead = { ...agathe, id: 'recSophie', nom: 'Sophie Garnier', dateAction: '2026-10-16' };
+  const sophie: Lead = {
+    ...agathe,
+    id: 'recSophie',
+    nom: 'Sophie Garnier',
+    dateAction: '2026-10-16',
+  };
 
   beforeEach(() => {
     store.tasks = [];

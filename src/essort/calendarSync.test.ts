@@ -291,12 +291,7 @@ describe('agenda Google : ce qu’il faut écrire', () => {
 
   it('un doublon du bot est supprimé, le passé n’est pas touché', () => {
     const past = ours('old', { ...bruno, key: 'task:1', date: '2026-10-12' });
-    const changes = planCalendar(
-      [bruno],
-      [ours('e1', bruno), ours('e2', bruno), past],
-      60,
-      TODAY,
-    );
+    const changes = planCalendar([bruno], [ours('e1', bruno), ours('e2', bruno), past], 60, TODAY);
     expect(changes.remove).toEqual(['e2']);
   });
 });
