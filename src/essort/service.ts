@@ -692,8 +692,10 @@ export async function syncFromCrm(client: Client): Promise<void> {
             (t) => t.source === 'manual',
           )
         : [];
+      // Une action passée n'est jamais remise au tableau : elle ne s'annonce pas non plus.
       const candidates = (previous ? changedActions(previous.actions, plan.actions) : []).filter(
         (a) =>
+          a.date >= date &&
           !written.some(
             (t) =>
               t.essort_boards.board_date === a.date &&

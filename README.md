@@ -163,9 +163,10 @@ cité dans le texte (« R1 · Enzo appelle Lucie »), sinon **les deux tableaux*
 retire de son côté). Un autre prénom : aucun tableau. Le libellé est celui du CRM, complété du nom
 du lead s'il ne le cite pas (« Appel · Camille Dubreuil ») ; sans libellé, l'étape (« R1 », « Relance »).
 Dessous : le cabinet, la note d'une tâche, le téléphone s'il faut appeler (et qu'il n'est pas déjà
-dans le libellé). Une action **en retard** arrive sur le jour **sans heure** (« en retard, prévu le
-16/10 à 16:00 ») : l'heure d'un jour passé sonnerait pour rien. ⚠️ Le CRM propose 10 h par défaut
-pour une relance : une relance à venir laissée à 10 h sonne donc à 9 h, 9 h 30 et 9 h 50.
+dans le libellé). Une action dont la date est **passée n'est jamais remise** sur le tableau du jour
+(Loys, 29/10) : on la redate dans le CRM, ou on la reporte le soir sur Discord. ⚠️ Le CRM propose
+10 h par défaut pour une relance : une relance à venir laissée à 10 h sonne donc à 9 h, 9 h 30 et
+9 h 50.
 
 Pour voir ce que le bot posera, sans rien écrire (ni Discord, ni base) :
 

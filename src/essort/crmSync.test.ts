@@ -191,7 +191,7 @@ describe('synchro avec le CRM', () => {
       heure: '17:00',
       responsable: 'Enzo',
     });
-    // En retard depuis le 20/10 : sur le tableau, mais sans heure, donc sans ping.
+    // Prévue le 20/10, jamais faite : elle ne revient pas sur le tableau du jour.
     db.crm.actions.push({
       id: 'f-bastien',
       nom: 'Bastien Lambert',
@@ -208,11 +208,6 @@ describe('synchro avec le CRM', () => {
     await syncFromCrm(client);
 
     expect(rowsOf(enzo)).toEqual([
-      expect.objectContaining({
-        record_id: 'lead:f-bastien',
-        due_time: null,
-        details: 'en retard, prévu le 20/10 à 16:00',
-      }),
       expect.objectContaining({
         source: 'airtable',
         record_id: 'lead:f-lucie',

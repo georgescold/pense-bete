@@ -100,9 +100,10 @@ describe('lecture du CRM', () => {
     expect(people.Enzo.due[0]!.label).toBe('Relance · Jean-Marc Bernier');
   });
 
-  it('range retard, jour, semaine et au-delà', () => {
+  it('range jour, semaine et au-delà ; une date passée ne revient jamais sur le jour', () => {
     const { people } = agenda({
       actions: [
+        action({ id: 'jour', nom: 'Lucie', libelle: 'R1' }),
         action({ id: 'retard', nom: 'Sophie Garnier', libelle: 'Appel', jour: '2026-10-16' }),
         action({
           id: 'semaine',
@@ -114,20 +115,15 @@ describe('lecture du CRM', () => {
         action({ id: 'loin', nom: 'Antoine', libelle: 'R1', jour: '2026-11-06', heure: '11:00' }),
       ],
     });
-    // En retard : sur le jour, sans heure (elle sonnerait pour rien), l'heure prévue dans le détail.
-    expect(people.Enzo.due).toEqual([
-      expect.objectContaining({
-        recordId: 'lead:retard',
-        time: null,
-        details: 'en retard, prévu le 16/10 à 17:00',
-      }),
-    ]);
+    // Le 16/10 est passé : ni sur le jour, ni dans la semaine (Loys, 29/10).
+    expect(people.Enzo.due.map((d) => d.recordId)).toEqual(['lead:jour']);
     expect(people.Enzo.upcoming.map((u) => u.key)).toEqual([
       `lead:semaine|${signatureOf('R1', '2026-10-29')}`,
     ]);
     // Tout reste dans `actions` : une tâche déplacée sur un jour lointain n'est pas effacée.
     expect(people.Enzo.actions.map((a) => a.date)).toEqual([
       '2026-10-16',
+      today,
       '2026-10-29',
       '2026-11-06',
     ]);

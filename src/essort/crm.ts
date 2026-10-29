@@ -6,7 +6,6 @@ import {
   daysBetween,
   looksLikeMeeting,
   PEOPLE,
-  shortDate,
   significantWords,
   WEEK_DAYS,
   type Agenda,
@@ -197,7 +196,7 @@ interface CrmItem {
   date: string;
   time: string | null;
   label: string;
-  /** Sans le retard, ajouté au moment de poser la tâche. */
+  /** Le cabinet, la note, le téléphone s'il faut appeler. */
   details: string[];
   signature: string;
   match: CrmMatch;
@@ -255,24 +254,15 @@ function tacheItem(t: CrmTache): CrmItem {
   };
 }
 
-/** Juste ce qu'il faut pour agir : le cabinet, la note, le téléphone s'il faut appeler, un retard. */
-function detailsOf(item: CrmItem, today: string): string {
-  const parts = [...item.details];
-  if (daysBetween(item.date, today) > 0) {
-    const at = item.time ? ` à ${item.time}` : '';
-    parts.push(`en retard, prévu le ${shortDate(item.date)}${at}`);
-  }
-  return parts.join(' · ');
-}
-
 /**
- * L'agenda de chaque personne, comme le lisait l'ancienne version depuis
- * Airtable : échu (date ≤ aujourd'hui, retards compris) = tâche du jour ;
- * dans les 6 jours suivants = planning de la semaine ; tout, quelle que soit
- * la date, dans `actions` (pour dire ce qui a changé dans le CRM).
+ * L'agenda de chaque personne : prévu aujourd'hui = tâche du jour ; dans les
+ * 6 jours suivants = planning de la semaine ; tout, quelle que soit la date,
+ * dans `actions` (pour dire ce qui a changé dans le CRM).
  *
- * Une action en retard arrive sur le jour SANS heure : l'heure d'un jour passé
- * ne vaut plus aujourd'hui, elle sonnerait pour rien (le détail la rappelle).
+ * Une action dont la date est passée n'est JAMAIS remise sur le tableau du
+ * jour (Loys, 29/10 : au passage au CRM, toutes les fiches à la prochaine
+ * action périmée étaient arrivées d'un coup). On la redate dans le CRM, ou on
+ * la reporte le soir sur Discord.
  */
 export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS): Agenda {
   const people = Object.fromEntries(
@@ -281,7 +271,8 @@ export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS
   const heats = new Map<string, number>();
 
   for (const item of [...crm.actions.map(actionItem), ...crm.taches.map(tacheItem)]) {
-    const details = detailsOf(item, today);
+    // Juste ce qu'il faut pour agir : le cabinet, la note, le téléphone s'il faut appeler.
+    const details = item.details.join(' · ');
     for (const person of item.people) {
       const recordId =
         item.people.length > 1 ? `${item.recordId}@${person.toLowerCase()}` : item.recordId;
@@ -297,18 +288,18 @@ export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS
         ...(item.minutes ? { minutes: item.minutes } : {}),
       });
       const delta = daysBetween(today, item.date);
-      if (delta <= 0) {
+      if (delta === 0) {
         agenda.due.push({
           recordId,
           signature: item.signature,
           label: item.label,
           details,
           dueDate: item.date,
-          time: delta < 0 ? null : item.time,
+          time: item.time,
           match: item.match,
         });
         heats.set(recordId, item.heat);
-      } else if (delta <= weekDays) {
+      } else if (delta > 0 && delta <= weekDays) {
         agenda.upcoming.push({
           key,
           date: item.date,
@@ -322,12 +313,10 @@ export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS
   }
 
   for (const agenda of Object.values(people)) {
-    // Retards d'abord, puis par heure, puis les leads chauds.
+    // Par heure, puis les leads chauds.
     agenda.due.sort(
       (a, b) =>
-        a.dueDate.localeCompare(b.dueDate) ||
-        compareTime(a.time, b.time) ||
-        (heats.get(a.recordId) ?? 3) - (heats.get(b.recordId) ?? 3),
+        compareTime(a.time, b.time) || (heats.get(a.recordId) ?? 3) - (heats.get(b.recordId) ?? 3),
     );
     agenda.upcoming.sort((a, b) => a.date.localeCompare(b.date) || compareTime(a.time, b.time));
     agenda.actions.sort((a, b) => a.date.localeCompare(b.date) || compareTime(a.time, b.time));
