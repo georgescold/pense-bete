@@ -91,12 +91,18 @@ export interface EssortSpanRow {
   /** Question de fin de période, posée une seule fois (remise à zéro par un report). */
   asked_at: string | null;
   ask_message_id: string | null;
+  /** La tâche du calendrier du CRM qu'elle montre ; null pour une tâche d'avant ce lien. */
+  crm_ref: string | null;
   created_at: string;
 }
 
 export type SpanPatch = Partial<
   Pick<
     EssortSpanRow,
+    | 'person'
+    | 'channel_id'
+    | 'shared'
+    | 'kind'
     | 'label'
     | 'start_date'
     | 'start_time'
@@ -247,7 +253,16 @@ export async function addTask(
     Partial<
       Pick<
         EssortTaskRow,
-        'record_id' | 'signature' | 'details' | 'due_time' | 'position' | 'dismissed_at' | 'span_id'
+        | 'record_id'
+        | 'signature'
+        | 'details'
+        | 'due_time'
+        | 'position'
+        | 'dismissed_at'
+        | 'span_id'
+        | 'is_done'
+        | 'done_at'
+        | 'done_by'
       >
     >,
 ): Promise<EssortTaskRow> {
@@ -365,7 +380,12 @@ export async function listPlannedTasks(
 
 export async function addSpan(
   span: Pick<EssortSpanRow, 'person' | 'channel_id' | 'kind' | 'label' | 'start_date'> &
-    Partial<Pick<EssortSpanRow, 'start_time' | 'end_date' | 'end_time' | 'shared'>>,
+    Partial<
+      Pick<
+        EssortSpanRow,
+        'start_time' | 'end_date' | 'end_time' | 'shared' | 'crm_ref' | 'done_at' | 'done_by'
+      >
+    >,
 ): Promise<EssortSpanRow> {
   const { data, error } = await supabase.from(SPANS).insert(span).select().single();
   if (error) throw new Error(`addSpan: ${error.message}`);
@@ -398,6 +418,17 @@ export async function listOpenSpans(person?: EssortPerson): Promise<EssortSpanRo
   if (person) query = query.or(`person.eq.${person},shared.eq.true`);
   const { data, error } = await query.order('id', { ascending: true });
   if (error) throw new Error(`listOpenSpans: ${error.message}`);
+  return (data ?? []) as EssortSpanRow[];
+}
+
+/** Les tâches permanentes et périodes reliées au calendrier du CRM, faites et retirées comprises. */
+export async function listCrmSpans(): Promise<EssortSpanRow[]> {
+  const { data, error } = await supabase
+    .from(SPANS)
+    .select()
+    .not('crm_ref', 'is', null)
+    .order('id', { ascending: true });
+  if (error) throw new Error(`listCrmSpans: ${error.message}`);
   return (data ?? []) as EssortSpanRow[];
 }
 

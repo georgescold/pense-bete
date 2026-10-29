@@ -13,6 +13,7 @@ import {
   listBoardsToArchive,
   listAirtableTasksFor,
   listCarriedFrom,
+  listCrmSpans,
   listOpenSpans,
   listPlannedTasks,
   listSpanRows,
@@ -35,7 +36,15 @@ import { parisDateValue, zonedWallClockToUtc } from '../lib/datetime';
 import { expandOccurrences } from '../lib/embeds';
 import { appendRowsTo, clearRange, isSheetsConfigured } from '../lib/sheets';
 import { isCalendarConfigured } from '../lib/calendar';
-import { buildCrmAgenda, fetchCrm, recordUrl } from './crm';
+import {
+  buildCrmAgenda,
+  crmTacheId,
+  crmTaches,
+  fetchCrm,
+  recordUrl,
+  signatureOf,
+  tacheRecordId,
+} from './crm';
 import { followInCalendar } from './calendarSync';
 import {
   addDays,
@@ -49,6 +58,7 @@ import {
   WEEK_DAYS,
   type Agenda,
   type CrmAction,
+  type CrmSpanSpec,
 } from './planner';
 import {
   DEFAULT_END_TIME,
@@ -130,7 +140,8 @@ async function readAgenda(date: string, delays: number[]): Promise<Agenda | null
   for (const [attempt, delay] of delays.entries()) {
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     try {
-      const agenda = buildCrmAgenda(await fetchCrm(), date);
+      const readAt = Date.now();
+      const agenda = { ...buildCrmAgenda(await fetchCrm(), date), readAt };
       if (date === essortToday()) lastAgenda = { date, agenda };
       return agenda;
     } catch (err) {
@@ -138,6 +149,45 @@ async function readAgenda(date: string, delays: number[]): Promise<Agenda | null
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Écritures dans le CRM depuis Discord
+// ---------------------------------------------------------------------------
+
+/**
+ * Dernière écriture dans le CRM, par tâche (identifiant du tableau ou du CRM).
+ * Une lecture du CRM commencée avant ne la contient peut-être pas encore :
+ * elle ne doit pas défaire ce qu'on vient de faire sur Discord.
+ */
+const crmWrites = new Map<string, number>();
+
+function noteCrmWrite(id: string): void {
+  crmWrites.set(crmTacheId(id) ?? id, Date.now());
+}
+
+/** Écrite dans le CRM après le début de cette lecture : la lecture est en retard sur elle. */
+function writtenSince(id: string | null, readAt: number | undefined): boolean {
+  if (!id || readAt === undefined) return false;
+  return (crmWrites.get(crmTacheId(id) ?? id) ?? 0) >= readAt;
+}
+
+/** Une ligne du tableau créée après le début de la lecture : la lecture ne la connaît pas encore. */
+function newerThan(row: { created_at: string }, readAt: number | undefined): boolean {
+  return readAt !== undefined && Date.parse(row.created_at) >= readAt;
+}
+
+/** Cochée (ou décochée) dans le CRM : la ligne suit, au nom du CRM. */
+function crmDoneFields(done: boolean): Pick<EssortTaskRow, 'is_done' | 'done_at' | 'done_by'> {
+  return done
+    ? { is_done: true, done_at: new Date().toISOString(), done_by: 'CRM' }
+    : { is_done: false, done_at: null, done_by: null };
+}
+
+/** « hash|2026-10-29 » → « hash|2026-10-30 » : la même tâche, un autre jour. */
+function signatureOn(signature: string | null, date: string): string | null {
+  if (!signature) return null;
+  return `${signature.split('|').slice(0, -1).join('|')}|${date}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,8 +228,15 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
 
   for (const due of plan.due) {
     const onBoard = tasks.filter((t) => t.source === 'airtable' && t.record_id === due.recordId);
+    // Une tâche du calendrier : cochée ou non comme dans le CRM, sauf si on
+    // vient de la cocher ici (la lecture est alors en retard sur Discord).
+    const crmDone =
+      due.done !== undefined && !writtenSince(due.recordId, agenda.readAt) ? due.done : undefined;
 
-    if (manual.some((m) => duplicatesCrm({ label: m.label, time: m.due_time }, due))) {
+    if (
+      due.done === undefined &&
+      manual.some((m) => duplicatesCrm({ label: m.label, time: m.due_time }, due))
+    ) {
       // La tâche écrite tient lieu de l'action : on garde une trace masquée de
       // l'action pour ce jour, sinon elle reviendrait « en retard » le
       // lendemain si la tâche écrite n'est ni faite ni reportée.
@@ -209,6 +266,10 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
     const same = onBoard.find((t) => t.signature === due.signature);
     if (same) {
       keep.add(same.id);
+      if (crmDone !== undefined && same.is_done !== crmDone) {
+        await updateTask(same.id, crmDoneFields(crmDone));
+        if (!crmDone) void removeFromSheet(same.id);
+      }
       // Modifiée depuis Discord : la version de la personne l'emporte.
       const open = !same.is_done && !same.dismissed_at && !same.edited_at;
       const changed =
@@ -251,6 +312,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
         due_time: due.time,
         pings_sent: 0,
         edited_at: null,
+        ...(crmDone ? crmDoneFields(true) : {}),
       });
       continue;
     }
@@ -264,6 +326,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
       details: due.details,
       due_time: due.time,
       position: position++,
+      ...(crmDone ? crmDoneFields(true) : {}),
     });
     keep.add(added.id);
   }
@@ -271,11 +334,15 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
   // Une tâche du CRM non faite disparaît quand son action n'est plus due ici
   // (date repoussée, lead mort)… sauf si cette action existe toujours dans le
   // CRM : c'est alors la personne qui l'a déplacée ici depuis Discord.
+  // Une ligne posée depuis Discord après le début de la lecture n'y est pas encore : elle reste.
   const stillInCrm = new Set(plan.actions.map((a) => a.key));
   for (const t of tasks) {
     const open = !t.is_done && !t.dismissed_at;
     const movedHere = stillInCrm.has(`${t.record_id}|${t.signature}`);
-    if (t.source === 'airtable' && open && !keep.has(t.id) && !movedHere) await deleteTask(t.id);
+    const fresh = newerThan(t, agenda.readAt) || writtenSince(t.record_id, agenda.readAt);
+    if (t.source === 'airtable' && open && !keep.has(t.id) && !movedHere && !fresh) {
+      await deleteTask(t.id);
+    }
   }
 
   await updateBoard(board.id, {
@@ -470,6 +537,8 @@ export async function pruneFutureCrmTasks(
   const future = await listPlannedTasks(person, addDays(today, 1), '9999-12-31');
   for (const t of future) {
     if (t.source !== 'airtable' || t.is_done) continue;
+    // Posée ou modifiée depuis Discord pendant la lecture : la lecture ne la connaît pas encore.
+    if (newerThan(t, agenda.readAt) || writtenSince(t.record_id, agenda.readAt)) continue;
     if (!stillInCrm.has(`${t.record_id}|${t.signature}`)) await deleteTask(t.id);
   }
 }
@@ -586,6 +655,7 @@ async function publishBoard(
 export async function publishBoards(client: Client): Promise<void> {
   const date = essortToday();
   const agenda = await readAgenda(date, SCHEDULED_READ_DELAYS);
+  await followCrmSpans(agenda);
   const failures: unknown[] = [];
   for (const m of essortMembers) {
     try {
@@ -606,7 +676,10 @@ export async function publishBoards(client: Client): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** Dernier agenda lu par personne : ce qui a changé depuis mérite d'être dit. */
-const lastSeen = new Map<EssortPerson, { fingerprint: string; actions: Map<string, CrmAction> }>();
+const lastSeen = new Map<
+  EssortPerson,
+  { fingerprint: string; actions: Map<string, CrmAction>; readAt?: number }
+>();
 
 /** Actions nouvelles, ou dont le jour, l'heure ou l'intitulé ont changé. */
 export function changedActions(previous: Map<string, CrmAction>, next: CrmAction[]): CrmAction[] {
@@ -657,6 +730,8 @@ export async function syncFromCrm(client: Client): Promise<void> {
   const agenda = await readAgenda(date, [0]);
   // CRM injoignable : la prochaine synchro réessaiera.
   if (!agenda) return;
+  // Une tâche du CRM sur plusieurs jours ajoutée, changée ou cochée : tous les tableaux suivent.
+  const spansChanged = await followCrmSpans(agenda);
 
   for (const m of essortMembers) {
     try {
@@ -668,10 +743,12 @@ export async function syncFromCrm(client: Client): Promise<void> {
       const board = await getBoard(m.person, date);
       if (!board?.message_id || board.archived_at) continue;
       const tasksChanged = lastBoardState.get(board.id) !== (await boardState(board));
-      if (!crmChanged && !tasksChanged) continue;
+      if (!crmChanged && !tasksChanged && !spansChanged) continue;
 
       await withBoardLock(board.id, async () => {
-        await reconcile((await getBoardById(board.id)) ?? board, agenda);
+        const current = (await getBoardById(board.id)) ?? board;
+        await reconcile(current, agenda);
+        await placeSpans(current);
         await pruneFutureCrmTasks(m.person, date, agenda);
         await renderBoard(client, board.id);
         await schedulePings(client, board.id);
@@ -710,11 +787,14 @@ export async function syncFromCrm(client: Client): Promise<void> {
       const changes = candidates.filter((a) => {
         const [recordId, ...rest] = a.key.split('|');
         const action = { recordId: recordId!, signature: rest.join('|'), date: a.date };
+        // Ce qu'on vient de faire soi-même sur Discord ne s'annonce pas comme un changement du CRM.
+        if (writtenSince(recordId!, previous?.readAt)) return false;
         return !restatesPastAction(action, handled, date);
       });
       lastSeen.set(m.person, {
         fingerprint,
         actions: new Map(plan.actions.map((a) => [a.key, a])),
+        readAt: agenda.readAt,
       });
       if (changes.length > 0) {
         const channel = await fetchChannel(client, board.channel_id);
@@ -765,7 +845,9 @@ function calendarFollows(): void {
 export function refreshBoard(client: Client, board: EssortBoardRow): Promise<void> {
   return withBoardLock(board.id, async () => {
     const fresh = (await getBoardById(board.id)) ?? board;
-    await reconcile(fresh, await readAgenda(fresh.board_date, [0]));
+    const agenda = await readAgenda(fresh.board_date, [0]);
+    await followCrmSpans(agenda);
+    await reconcile(fresh, agenda);
     await placeSpans(fresh);
     await renderBoard(client, board.id);
     await schedulePings(client, board.id);
@@ -775,7 +857,9 @@ export function refreshBoard(client: Client, board: EssortBoardRow): Promise<voi
 
 /**
  * Ajoute une tâche à un jour (aujourd'hui ou plus tard) pour la personne du
- * tableau. Un jour à venir a son propre tableau, publié le matin venu.
+ * tableau. Elle va d'abord dans le calendrier du CRM (sans réponse, rien n'est
+ * créé, la personne le voit), puis sur le tableau de ce jour, reliée à elle.
+ * Un jour à venir a son propre tableau, publié le matin venu.
  */
 export async function planTask(
   client: Client,
@@ -784,6 +868,13 @@ export async function planTask(
   label: string,
   time: string | null,
 ): Promise<void> {
+  const id = await crmTaches.creer({
+    titre: label,
+    jour: date,
+    heure: time,
+    responsable: todayBoard.person,
+  });
+  noteCrmWrite(id);
   const isToday = date === todayBoard.board_date;
   const target = isToday
     ? todayBoard
@@ -792,7 +883,9 @@ export async function planTask(
     const tasks = await listTasks(target.id, true);
     await addTask({
       board_id: target.id,
-      source: 'manual',
+      source: 'airtable',
+      record_id: tacheRecordId(id),
+      signature: signatureOf(label, date),
       label,
       due_time: time,
       position: nextPosition(tasks),
@@ -832,6 +925,17 @@ export function editTask(
     const from = await getBoardById(task.board_id);
     if (!from || from.person !== todayBoard.person) return null;
 
+    // Une tâche du calendrier du CRM y est modifiée d'abord : il fait foi.
+    const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : null;
+    if (tacheId) {
+      await crmTaches.modifier(tacheId, {
+        titre: change.label,
+        jour: change.date,
+        heure: change.time,
+      });
+      noteCrmWrite(tacheId);
+    }
+
     if (change.date !== from.board_date) {
       const { board: target } = await ensureBoard(
         todayBoard.person,
@@ -845,7 +949,13 @@ export function editTask(
       label: change.label,
       due_time: change.time,
       ...(timeChanged ? { pings_sent: 0 } : {}),
-      ...(task.source === 'airtable' ? { edited_at: new Date().toISOString() } : {}),
+      // Une action de fiche garde la version de Discord tant que le CRM ne la
+      // change pas ; une tâche du calendrier, elle, vient d'être écrite dans le CRM.
+      ...(tacheId
+        ? { signature: signatureOf(change.label, change.date) }
+        : task.source === 'airtable'
+          ? { edited_at: new Date().toISOString() }
+          : {}),
     });
 
     // Le jour et la semaine peuvent changer tous les deux (déplacement).
@@ -859,12 +969,18 @@ export function editTask(
 }
 
 /**
- * Retire une tâche. Une tâche ajoutée à la main est supprimée ; une tâche
- * du CRM est seulement masquée, pour ne pas revenir aux relectures tant que
- * l'action ou la date du lead ne changent pas. Une ligne déjà écrite dans le
- * Sheet est effacée.
+ * Retire une tâche. Une tâche ajoutée à la main est supprimée ; une tâche du
+ * calendrier du CRM y est supprimée aussi (d'abord) ; l'action d'une fiche est
+ * seulement masquée, pour ne pas revenir aux relectures tant que l'action ou
+ * la date du lead ne changent pas. Une ligne déjà écrite dans le Sheet est
+ * effacée.
  */
 async function dismissTask(task: EssortTaskRow): Promise<void> {
+  const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : null;
+  if (tacheId) {
+    await crmTaches.supprimer(tacheId);
+    noteCrmWrite(tacheId);
+  }
   // Décochée avant tout : plus aucune synchro ne la recopiera dans le Sheet.
   await updateTask(task.id, {
     is_done: false,
@@ -946,6 +1062,14 @@ export async function toggleTasks(
       const task = await getTask(id);
       if (!task || task.board_id !== board.id) continue;
       const done = !task.is_done;
+      // Une tâche du calendrier se coche d'abord dans le CRM (pour les deux, s'il y a lieu),
+      // une tâche permanente ou une période aussi (sa ligne du jour la coche entière).
+      const spanRef = task.span_id ? ((await getSpan(task.span_id))?.crm_ref ?? null) : null;
+      const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : spanRef;
+      if (tacheId) {
+        await crmTaches.modifier(tacheId, { fait: done });
+        noteCrmWrite(tacheId);
+      }
       await updateTask(task.id, {
         is_done: done,
         done_at: done ? new Date().toISOString() : null,
@@ -1061,10 +1185,20 @@ export function toggleCarry(
     for (const id of taskIds) {
       const task = await getTask(id);
       if (!task || task.is_done || task.dismissed_at || task.span_id) continue;
+      const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : null;
+      // Une tâche du calendrier change de jour dans le CRM aussi (à la même heure).
+      const moveInCrm = async (date: string): Promise<void> => {
+        if (!tacheId) return;
+        await crmTaches.modifier(tacheId, { jour: date });
+        noteCrmWrite(tacheId);
+        await updateTask(task.id, { signature: signatureOn(task.signature, date) });
+      };
       if (task.board_id === board.id) {
+        await moveInCrm(tomorrow.board_date);
         const position = nextPosition(await listTasks(tomorrow.id, true));
         await moveTask(task.id, tomorrow.id, position, board.id);
       } else if (task.carried_from === board.id && task.board_id === tomorrow.id) {
+        await moveInCrm(board.board_date);
         const position = nextPosition(await listTasks(board.id, true));
         await moveTask(task.id, board.id, position, null);
       }
@@ -1244,6 +1378,85 @@ export async function placeSpans(board: EssortBoardRow): Promise<void> {
   }
 }
 
+/**
+ * Aligne les tâches permanentes et périodes de Discord sur les tâches du
+ * calendrier du CRM sur plusieurs jours (`crm_ref`) : crée celles qui
+ * manquent, reprend leur texte, leurs dates et leur responsable (sans
+ * responsable : pour toute l'équipe), les coche ou les rouvre comme le CRM,
+ * et retire celles qui n'y sont plus. Ce qu'on vient d'écrire depuis Discord
+ * n'est pas défait par une lecture commencée avant. Renvoie vrai si quelque
+ * chose a changé : les tableaux sont alors redessinés.
+ */
+export async function syncCrmSpans(specs: CrmSpanSpec[], readAt?: number): Promise<boolean> {
+  if (essortMembers.length === 0) return false;
+  const existing = new Map((await listCrmSpans()).map((s) => [s.crm_ref ?? '', s]));
+  const wanted = new Set(specs.map((s) => s.ref));
+  const now = new Date().toISOString();
+  let changed = false;
+
+  for (const spec of specs) {
+    const span = existing.get(spec.ref);
+    if (writtenSince(spec.ref, readAt) || spec.people.length === 0) continue;
+    if (span?.dismissed_at) continue;
+    const shared = spec.people.length > 1;
+    // Pour toute l'équipe, la question de fin reste chez qui l'avait.
+    const member =
+      (shared && span ? memberOf(span.person) : memberOf(spec.people[0]!)) ?? essortMembers[0]!;
+    const fields = {
+      person: member.person,
+      channel_id: member.channelId,
+      shared,
+      kind: spec.kind,
+      label: spec.label,
+      start_date: spec.start_date,
+      start_time: spec.start_time,
+      end_date: spec.kind === 'period' ? spec.end_date : null,
+      end_time: spec.kind === 'period' ? (spec.end_time ?? DEFAULT_END_TIME) : null,
+    };
+    if (!span) {
+      if (spec.done) continue;
+      await addSpan({ ...fields, crm_ref: spec.ref });
+      changed = true;
+      continue;
+    }
+    const patch: SpanPatch = {};
+    for (const [key, value] of Object.entries(fields) as [keyof typeof fields, unknown][]) {
+      if (span[key] !== value) Object.assign(patch, { [key]: value });
+    }
+    if (patch.end_date !== undefined || patch.end_time !== undefined) {
+      Object.assign(patch, { asked_at: null, ask_message_id: null });
+    }
+    if (spec.done && !span.done_at) Object.assign(patch, { done_at: now, done_by: 'CRM' });
+    if (!spec.done && span.done_at) {
+      Object.assign(patch, { done_at: null, done_by: null, asked_at: null, ask_message_id: null });
+    }
+    if (Object.keys(patch).length > 0) {
+      await updateSpan(span.id, patch);
+      changed = true;
+    }
+  }
+
+  // Supprimée dans le CRM (ou devenue une tâche d'un jour) : elle part de Discord.
+  for (const span of existing.values()) {
+    if (!span.crm_ref || wanted.has(span.crm_ref) || !isSpanOpen(span)) continue;
+    if (newerThan(span, readAt) || writtenSince(span.crm_ref, readAt)) continue;
+    await updateSpan(span.id, { dismissed_at: now });
+    changed = true;
+  }
+  return changed;
+}
+
+/** Les tâches du CRM sur plusieurs jours, après une lecture ; une erreur ne bloque pas les tableaux. */
+async function followCrmSpans(agenda: Agenda | null): Promise<boolean> {
+  if (!agenda?.spans) return false;
+  try {
+    return await syncCrmSpans(agenda.spans, agenda.readAt);
+  } catch (err) {
+    logger.error({ err }, 'taches du CRM sur plusieurs jours non synchronisees');
+    return false;
+  }
+}
+
 /** Les personnes dont le tableau montre la tâche : toute l'équipe, ou la sienne. */
 function spanPeople(span: EssortSpanRow): readonly EssortPerson[] {
   return span.shared ? PEOPLE : [span.person];
@@ -1299,6 +1512,18 @@ export async function createSpan(
   todayBoard: EssortBoardRow,
   input: { kind: SpanKind; shared?: boolean; label: string; start: Moment; end: Moment | null },
 ): Promise<EssortSpanRow> {
+  const endTime = input.end ? (input.end.time ?? DEFAULT_END_TIME) : null;
+  // D'abord dans le calendrier du CRM (pour les deux : sans responsable).
+  const ref = await crmTaches.creer({
+    titre: input.label,
+    jour: input.start.date,
+    heure: input.start.time,
+    responsable: input.shared ? null : todayBoard.person,
+    permanente: input.kind === 'permanent',
+    fin_jour: input.end?.date ?? null,
+    fin_heure: endTime,
+  });
+  noteCrmWrite(ref);
   const span = await addSpan({
     person: todayBoard.person,
     channel_id: todayBoard.channel_id,
@@ -1308,7 +1533,8 @@ export async function createSpan(
     start_date: input.start.date,
     start_time: input.start.time,
     end_date: input.end?.date ?? null,
-    end_time: input.end ? (input.end.time ?? DEFAULT_END_TIME) : null,
+    end_time: endTime,
+    crm_ref: ref,
   });
   await withBoardLock(todayBoard.id, async () => {
     await placeSpans((await getBoardById(todayBoard.id)) ?? todayBoard);
@@ -1348,6 +1574,20 @@ export async function editSpan(
       patch.end_date !== undefined &&
       (patch.end_date !== span.end_date || patch.end_time !== span.end_time);
     if (endMoved) Object.assign(patch, { asked_at: null, ask_message_id: null });
+    if (span.crm_ref) {
+      await crmTaches.modifier(span.crm_ref, {
+        titre: change.label,
+        ...(patch.start_date !== undefined
+          ? {
+              jour: patch.start_date,
+              heure: patch.start_time ?? null,
+              fin_jour: patch.end_date ?? null,
+              fin_heure: patch.end_time ?? null,
+            }
+          : {}),
+      });
+      noteCrmWrite(span.crm_ref);
+    }
     const updated = await updateSpan(span.id, patch);
     if (!updated) return null;
     if (endMoved) await closeSpanQuestion(client, span, spanClosedText(updated, 'report', null));
@@ -1392,6 +1632,11 @@ export async function removeSpans(
 
 /** Retire une tâche permanente ou une période : elle ne s'affiche plus nulle part. */
 async function dropSpan(client: Client, span: EssortSpanRow, by: string | null): Promise<void> {
+  // Retirée ou abandonnée sur Discord : elle quitte aussi le calendrier du CRM.
+  if (span.crm_ref) {
+    await crmTaches.supprimer(span.crm_ref);
+    noteCrmWrite(span.crm_ref);
+  }
   await updateSpan(span.id, { dismissed_at: new Date().toISOString() });
   const today = essortToday();
   for (const row of await listSpanRows(span.id)) {
@@ -1514,6 +1759,10 @@ export async function answerSpan(
   if (answer === 'drop') {
     await dropSpan(client, span, by);
   } else {
+    if (span.crm_ref) {
+      await crmTaches.modifier(span.crm_ref, { fait: true });
+      noteCrmWrite(span.crm_ref);
+    }
     const doneAt = new Date().toISOString();
     await updateSpan(span.id, { done_at: doneAt, done_by: by });
     // Sa dernière ligne est cochée (celle de qui répond, pour une tâche de toute
@@ -1546,6 +1795,13 @@ export async function reportSpan(
 ): Promise<EssortSpanRow | null> {
   const found = await getSpan(spanId);
   if (!found || found.kind !== 'period' || !isSpanOpen(found)) return null;
+  if (found.crm_ref) {
+    await crmTaches.modifier(found.crm_ref, {
+      fin_jour: end.date,
+      fin_heure: end.time ?? DEFAULT_END_TIME,
+    });
+    noteCrmWrite(found.crm_ref);
+  }
   const updated = await updateSpan(found.id, {
     end_date: end.date,
     end_time: end.time ?? DEFAULT_END_TIME,

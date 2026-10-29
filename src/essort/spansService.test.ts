@@ -151,9 +151,24 @@ vi.mock('../lib/calendar', () => ({
   listEvents: async () => [],
   updateEvent: async () => undefined,
 }));
+// Le calendrier du CRM : chaque tâche créée sur Discord y reçoit un identifiant.
+const crmCalls = vi.hoisted(() => ({ n: 0, log: [] as unknown[][] }));
 vi.mock('./crm', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./crm')>()),
   fetchCrm: async () => ({ actions: [], taches: [] }),
+  crmTaches: {
+    creer: async (t: unknown) => {
+      crmCalls.log.push(['creer', t]);
+      return `crm-${++crmCalls.n}`;
+    },
+    modifier: async (id: string, patch: unknown) => {
+      crmCalls.log.push(['modifier', id, patch]);
+      return true;
+    },
+    supprimer: async (id: string) => {
+      crmCalls.log.push(['supprimer', id]);
+    },
+  },
 }));
 
 const service = await import('./service');

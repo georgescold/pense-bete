@@ -1,34 +1,41 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { config, type EssortPerson } from '../config';
+import { logger } from '../logger';
 import {
   compareTime,
   daysBetween,
+  duplicatesCrm,
   looksLikeMeeting,
   PEOPLE,
   significantWords,
   WEEK_DAYS,
   type Agenda,
   type CrmMatch,
+  type CrmSpanSpec,
   type PersonAgenda,
 } from './planner';
 
 /**
- * Lecture du CRM d'Essort (crm.essort.agency, espace « ESSORT · Leads du
- * site ») : les rendez-vous et les tâches que le bot pose sur les tableaux de
- * Loys et d'Enzo.
+ * Le CRM d'Essort (crm.essort.agency, espace « ESSORT · Leads du site ») : les
+ * rendez-vous et les tâches que le bot pose sur les tableaux de Loys et d'Enzo.
  *
- * ⚠️ LECTURE SEULE. Le bot n'appelle qu'une route, en GET :
- * `/api/pense-bete/agenda`, protégée par `CRM_SECRET` (la variable
- * `PENSE_BETE_SECRET` du projet Vercel essort-crm), qui lit la base dans une
- * transaction `read only`. Le suivi des tâches faites vit dans Supabase et le
- * Google Sheet, jamais dans le CRM.
+ * Deux routes, protégées par `CRM_SECRET` (la variable `PENSE_BETE_SECRET` du
+ * projet Vercel essort-crm) :
+ *  - `GET /api/pense-bete/agenda` : la lecture, dans une transaction `read only` ;
+ *  - `/api/pense-bete/taches` : ce qu'on fait sur Discord aux TÂCHES du
+ *    calendrier (ajouter, cocher, modifier, reporter, retirer) y est écrit
+ *    (Loys, 29/10 : le calendrier du CRM et Discord, le même fonctionnement,
+ *    dans les deux sens). Le calendrier est la seule source des tâches. Les
+ *    prochaines actions des fiches, elles, ne s'écrivent que dans le CRM.
  *
  * Ce qui en sort :
  *  - la prochaine action de chaque fiche (`next_action_at`, `next_action_label`),
  *    sur le tableau de son responsable (dernier événement « assignation ») ;
- *  - les tâches du calendrier pas encore faites (table `taches`), sur le
- *    tableau de leur responsable ;
+ *  - les tâches du calendrier (table `taches`) sur le tableau de leur
+ *    responsable : d'un jour, comme les actions ; sur plusieurs jours (période
+ *    ou permanente), comme les tâches permanentes et périodes de Discord
+ *    (`essort_spans`, reliées par `crm_ref`) ;
  *  - sans responsable : le seul prénom de l'équipe cité dans le texte
  *    (« R1 · Enzo appelle Lucie »), sinon les deux tableaux ;
  *  - une heure à minuit, ou une tâche « toute la journée » : un jour sans heure.
@@ -62,6 +69,12 @@ const tacheSchema = z.object({
   lead_nom: z.string().nullable(),
   lead_cabinet: z.string().nullable(),
   lead_telephone: z.string().nullable(),
+  /** Fin d'une période ; null pour une tâche d'un jour ou permanente. */
+  fin_jour: z.string().regex(ISO_DATE).nullable().default(null),
+  fin_heure: z.string().regex(HH_MM).nullable().default(null),
+  permanente: z.boolean().default(false),
+  /** Cochée dans le CRM (ou depuis Discord) : la route garde 7 jours les tâches faites. */
+  fait: z.boolean().default(false),
 });
 
 const responseSchema = z.object({
@@ -71,8 +84,8 @@ const responseSchema = z.object({
 });
 
 export type CrmLeadAction = z.infer<typeof actionSchema>;
-export type CrmTache = z.infer<typeof tacheSchema>;
-export type CrmData = Omit<z.infer<typeof responseSchema>, 'ok'>;
+export type CrmTache = z.input<typeof tacheSchema>;
+export type CrmData = { actions: CrmLeadAction[]; taches: CrmTache[] };
 
 /** Les rendez-vous et les tâches de l'espace ESSORT. */
 export async function fetchCrm(): Promise<CrmData> {
@@ -89,6 +102,87 @@ export async function fetchCrm(): Promise<CrmData> {
   }
   const { actions, taches } = responseSchema.parse(await res.json());
   return { actions, taches };
+}
+
+/** Une tâche telle que Discord l'écrit dans le calendrier du CRM (heure de Paris). */
+export interface CrmTacheEcrite {
+  titre: string;
+  jour: string;
+  /** null : toute la journée. */
+  heure: string | null;
+  /** null : pour les deux. */
+  responsable: string | null;
+  fin_jour?: string | null;
+  fin_heure?: string | null;
+  permanente?: boolean;
+}
+
+/** Ce qu'on dit sur Discord quand le CRM n'a pas pu enregistrer : rien n'a changé. */
+export const CRM_INJOIGNABLE =
+  'Le CRM n’a pas répondu : rien n’est changé, ni ici ni dans le calendrier. Réessaie dans un instant.';
+
+async function ecrire(
+  method: 'POST' | 'PATCH' | 'DELETE',
+  body: Record<string, unknown>,
+): Promise<{ id: string } | null> {
+  const secret = config.CRM_SECRET;
+  if (!secret) throw new Error(CRM_INJOIGNABLE);
+  let res: Response;
+  try {
+    res = await fetch(`${config.CRM_URL.replace(/\/+$/, '')}/api/pense-bete/taches`, {
+      method,
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    logger.warn({ err, method }, 'ecriture CRM impossible');
+    throw new Error(CRM_INJOIGNABLE);
+  }
+  // Déjà supprimée dans le CRM : il n'y a plus rien à y faire.
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    logger.warn(
+      { status: res.status, body: (await res.text()).slice(0, 200), method },
+      'ecriture CRM refusee',
+    );
+    throw new Error(CRM_INJOIGNABLE);
+  }
+  return (await res.json()) as { id: string };
+}
+
+/**
+ * Les tâches du calendrier du CRM, écrites depuis Discord. Chaque appel lève
+ * `CRM_INJOIGNABLE` en cas d'échec : l'appelant n'a alors rien changé de son
+ * côté, et la personne voit l'erreur.
+ */
+export const crmTaches = {
+  async creer(t: CrmTacheEcrite): Promise<string> {
+    const res = await ecrire('POST', { ...t });
+    if (!res) throw new Error(CRM_INJOIGNABLE);
+    return res.id;
+  },
+  /** Faux si la tâche n'existe plus dans le CRM. */
+  async modifier(
+    id: string,
+    patch: Partial<CrmTacheEcrite> & { fait?: boolean },
+  ): Promise<boolean> {
+    return (await ecrire('PATCH', { id, ...patch })) !== null;
+  },
+  async supprimer(id: string): Promise<void> {
+    await ecrire('DELETE', { id });
+  },
+};
+
+/** L'identifiant de la tâche du CRM derrière une tâche du tableau, ou null (action d'une fiche, tâche d'avant). */
+export function crmTacheId(recordId: string | null | undefined): string | null {
+  const base = recordId?.split('@')[0] ?? '';
+  return base.startsWith(TACHE) ? base.slice(TACHE.length) : null;
+}
+
+/** L'identifiant d'une tâche du CRM, sur le tableau. */
+export function tacheRecordId(id: string): string {
+  return `${TACHE}${id}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +296,8 @@ interface CrmItem {
   match: CrmMatch;
   heat: number;
   minutes?: number;
+  /** Une tâche du calendrier : cochée ou non dans le CRM. Absent pour une action de fiche. */
+  done?: boolean;
 }
 
 function actionItem(a: CrmLeadAction): CrmItem {
@@ -251,7 +347,32 @@ function tacheItem(t: CrmTache): CrmItem {
     match: { names, meeting: looksLikeMeeting(t.titre), prep: false },
     heat: 3,
     minutes: t.duree_minutes,
+    done: t.fait ?? false,
   };
+}
+
+/** Une période ou une tâche permanente : elle vit sur Discord comme celles qu'on y crée. */
+function surPlusieursJours(t: CrmTache): boolean {
+  return Boolean(t.permanente || t.fin_jour);
+}
+
+/**
+ * Les tâches du calendrier sur plusieurs jours, telles que les tâches
+ * permanentes et périodes de Discord (`essort_spans`) doivent les montrer.
+ * Sans responsable, ou les deux prénoms cités : pour toute l'équipe.
+ */
+export function crmSpanSpecs(crm: CrmData): CrmSpanSpec[] {
+  return crm.taches.filter(surPlusieursJours).map((t) => ({
+    ref: t.id,
+    kind: t.permanente ? ('permanent' as const) : ('period' as const),
+    label: withLead(t.titre, t.lead_nom, t.lead_nom ? significantWords(t.lead_nom) : []),
+    people: peopleFor(t.responsable, t.titre),
+    start_date: t.jour,
+    start_time: t.heure,
+    end_date: t.permanente ? null : (t.fin_jour ?? null),
+    end_time: t.permanente ? null : (t.fin_heure ?? null),
+    done: t.fait ?? false,
+  }));
 }
 
 /**
@@ -263,6 +384,11 @@ function tacheItem(t: CrmTache): CrmItem {
  * jour (Loys, 29/10 : au passage au CRM, toutes les fiches à la prochaine
  * action périmée étaient arrivées d'un coup). On la redate dans le CRM, ou on
  * la reporte le soir sur Discord.
+ *
+ * Les tâches du calendrier d'un jour s'y ajoutent, cochées si elles le sont
+ * dans le CRM ; une telle tâche l'emporte sur l'action d'une fiche qui dit la
+ * même chose le même jour (comme une tâche écrite à la main sur Discord). Les
+ * tâches sur plusieurs jours n'y sont pas : elles vont dans `spans`.
  */
 export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS): Agenda {
   const people = Object.fromEntries(
@@ -270,10 +396,21 @@ export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS
   ) as Record<EssortPerson, PersonAgenda>;
   const heats = new Map<string, number>();
 
-  for (const item of [...crm.actions.map(actionItem), ...crm.taches.map(tacheItem)]) {
+  const taches = crm.taches.filter((t) => !surPlusieursJours(t)).map(tacheItem);
+  /** L'action d'une fiche qu'une tâche du même jour, chez la même personne, dit déjà. */
+  const ditDeja = (item: CrmItem, person: EssortPerson): boolean =>
+    taches.some(
+      (t) =>
+        t.date === item.date &&
+        t.people.includes(person) &&
+        duplicatesCrm({ label: t.label, time: t.time }, item),
+    );
+
+  for (const item of [...crm.actions.map(actionItem), ...taches]) {
     // Juste ce qu'il faut pour agir : le cabinet, la note, le téléphone s'il faut appeler.
     const details = item.details.join(' · ');
     for (const person of item.people) {
+      if (item.done === undefined && ditDeja(item, person)) continue;
       const recordId =
         item.people.length > 1 ? `${item.recordId}@${person.toLowerCase()}` : item.recordId;
       const key = `${recordId}|${item.signature}`;
@@ -297,9 +434,10 @@ export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS
           dueDate: item.date,
           time: item.time,
           match: item.match,
+          ...(item.done !== undefined ? { done: item.done } : {}),
         });
         heats.set(recordId, item.heat);
-      } else if (delta > 0 && delta <= weekDays) {
+      } else if (delta > 0 && delta <= weekDays && !item.done) {
         agenda.upcoming.push({
           key,
           date: item.date,
@@ -322,5 +460,5 @@ export function buildCrmAgenda(crm: CrmData, today: string, weekDays = WEEK_DAYS
     agenda.actions.sort((a, b) => a.date.localeCompare(b.date) || compareTime(a.time, b.time));
   }
 
-  return { people };
+  return { people, spans: crmSpanSpecs(crm) };
 }

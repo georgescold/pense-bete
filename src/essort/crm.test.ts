@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCrmAgenda,
+  crmSpanSpecs,
   defaultTitle,
   peopleFor,
   recordUrl,
@@ -208,6 +209,51 @@ describe('lecture du CRM', () => {
     expect(signatureOf('Rappeler  Élodie', '2026-10-30')).toBe(
       signatureOf('rappeler elodie', '2026-10-30'),
     );
+  });
+
+  it('une tâche du jour l’emporte sur l’action de la fiche qui dit la même chose', () => {
+    const { people } = agenda({
+      actions: [action({ id: 'f-lucie', libelle: 'R1 · Enzo appelle Lucie' })],
+      taches: [tache({ titre: 'Appel R1 avec Lucie', responsable: 'Enzo', heure: '17:00' })],
+    });
+    expect(people.Enzo.due.map((d) => d.recordId)).toEqual(['tache:t-video']);
+    expect(people.Enzo.actions.map((a) => a.key.split('|')[0])).toEqual(['tache:t-video']);
+  });
+
+  it('une tâche cochée dans le CRM arrive cochée ; elle ne s’annonce plus dans la semaine', () => {
+    const { people } = agenda({
+      taches: [tache({ fait: true }), tache({ id: 't-demain', jour: '2026-10-29', fait: true })],
+    });
+    expect(people.Loys.due).toEqual([expect.objectContaining({ done: true })]);
+    expect(people.Loys.upcoming).toEqual([]);
+  });
+
+  it('une période ou une tâche permanente part à côté, comme celles de Discord', () => {
+    const data = {
+      actions: [],
+      taches: [
+        tache({ id: 't-perm', permanente: true, responsable: null }),
+        tache({
+          id: 't-per',
+          fin_jour: '2026-10-30',
+          fin_heure: '19:00',
+          lead_nom: 'Julie Perrin',
+        }),
+      ],
+    };
+    const result = buildCrmAgenda(data, today);
+    expect(result.people.Loys.due).toEqual([]);
+    expect(result.spans).toEqual([
+      expect.objectContaining({ ref: 't-perm', kind: 'permanent', people: ['Loys', 'Enzo'] }),
+      expect.objectContaining({
+        ref: 't-per',
+        kind: 'period',
+        people: ['Loys'],
+        end_date: '2026-10-30',
+        label: 'Tourner la vidéo coachs · Julie Perrin',
+      }),
+    ]);
+    expect(crmSpanSpecs(data)).toEqual(result.spans);
   });
 
   it('mène à la fiche ou à la tâche dans le CRM', () => {

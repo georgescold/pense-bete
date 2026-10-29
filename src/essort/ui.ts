@@ -264,9 +264,11 @@ export function buildRemoveMenu(
             .setDescription(
               t.span_id
                 ? 'Retirée aussi des jours suivants'
-                : t.source === 'airtable'
-                  ? 'Ne reviendra pas tant que la fiche ne change pas dans le CRM'
-                  : 'Ajoutée à la main',
+                : t.record_id?.startsWith('tache:')
+                  ? 'Supprimée aussi du calendrier du CRM'
+                  : t.source === 'airtable'
+                    ? 'Ne reviendra pas tant que la fiche ne change pas dans le CRM'
+                    : 'Ajoutée à la main',
             ),
         ),
       ),

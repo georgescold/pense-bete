@@ -565,6 +565,8 @@ export interface DueTask {
   /** 'HH:MM' ou null. */
   time: string | null;
   match: CrmMatch;
+  /** Une tâche du calendrier du CRM : cochée ou non là-bas. Absent pour une action de fiche. */
+  done?: boolean;
 }
 
 export interface UpcomingItem {
@@ -601,8 +603,30 @@ export interface PersonAgenda {
   actions: CrmAction[];
 }
 
+/**
+ * Une tâche du calendrier du CRM sur plusieurs jours : sur Discord, une tâche
+ * permanente ou une période (`essort_spans`, reliée par `crm_ref`).
+ */
+export interface CrmSpanSpec {
+  /** Identifiant de la tâche dans le CRM. */
+  ref: string;
+  kind: 'permanent' | 'period';
+  label: string;
+  /** Une personne, ou les deux (pour toute l'équipe). */
+  people: EssortPerson[];
+  start_date: string;
+  start_time: string | null;
+  end_date: string | null;
+  end_time: string | null;
+  done: boolean;
+}
+
 export interface Agenda {
   people: Record<EssortPerson, PersonAgenda>;
+  /** Les tâches du CRM sur plusieurs jours (absent : la lecture n'en dit rien). */
+  spans?: CrmSpanSpec[];
+  /** Quand la lecture a commencé (ms) : ce qu'on a écrit depuis n'y est peut-être pas. */
+  readAt?: number;
 }
 
 /**

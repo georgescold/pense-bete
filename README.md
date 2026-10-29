@@ -150,15 +150,31 @@ qu'il a compris (« Agenda mis à jour depuis le CRM : - Mardi 13/10 · `14:00` 
 rythme, une tâche posée **directement dans la base du bot** (`essort_tasks`, par une autre session
 ou un script) apparaît sur le tableau et sonne, sans « 🔄 Actualiser ».
 
-**Lecture du CRM** : une seule route, `GET /api/pense-bete/agenda` (`crm/app/api/pense-bete/agenda/route.ts`),
+**Lecture du CRM** : `GET /api/pense-bete/agenda` (`crm/app/api/pense-bete/agenda/route.ts`),
 protégée par `CRM_SECRET` ; elle lit la base dans une transaction `read only`. Elle renvoie :
 - la **prochaine action** de chaque fiche : `next_action_at` (jour et heure de Paris ; minuit = un
   jour sans heure, comme le calendrier du CRM) et `next_action_label` ; ni les fiches perdues ni
   les tests. La personne est le dernier événement `assignation` de la fiche ;
-- les **tâches du calendrier** pas encore faites (table `taches` : `debut`, `duree_minutes`,
-  `journee`, `responsable`, `lead_id`), sur le tableau de leur responsable.
+- les **tâches du calendrier** (table `taches` : `debut`, `duree_minutes`, `journee`,
+  `responsable`, `lead_id`, `fin`, `permanente`, `fait`), celles cochées depuis moins de 7 jours
+  comprises, sur le tableau de leur responsable.
 
-Sans responsable (une tâche « Personne », une fiche jamais attribuée) : le seul prénom de l'équipe
+**Le calendrier du CRM et Discord, dans les deux sens** (Loys, 29/10). Le calendrier est la seule
+source des tâches ; Discord en est une vue qui y écrit, par `/api/pense-bete/taches` (même secret) :
+- une tâche ajoutée sur Discord (➕ Ajouter, ➕ Planifier, tâche permanente, période, pour toute
+  l'équipe) va d'abord dans le calendrier du CRM, puis sur le tableau ; cochée, modifiée, reportée le
+  soir ou retirée sur Discord, elle l'est dans le CRM. Sans réponse du CRM, rien ne change et la
+  personne le voit (« Le CRM n'a pas répondu… ») ;
+- dans l'autre sens, une tâche du calendrier d'un jour arrive sur le tableau de son jour, cochée si
+  elle l'est dans le CRM ; une période ou une tâche permanente du CRM devient une période ou une
+  tâche permanente de Discord (`essort_spans.crm_ref`), cochée, modifiée ou retirée comme dans le CRM ;
+- une tâche du calendrier l'emporte sur la prochaine action d'une fiche qui dit la même chose ;
+- ce qu'on vient de faire sur Discord n'est ni défait par une lecture du CRM commencée avant, ni
+  annoncé comme « mis à jour depuis le CRM » ;
+- les **prochaines actions des fiches**, elles, ne s'écrivent que dans le CRM ; les tâches créées
+  sur Discord avant le 29/10 restent sur Discord seulement.
+
+Sans responsable (une tâche « Les deux », une fiche jamais attribuée) : le seul prénom de l'équipe
 cité dans le texte (« R1 · Enzo appelle Lucie »), sinon **les deux tableaux** (chacun la coche ou la
 retire de son côté). Un autre prénom : aucun tableau. Le libellé est celui du CRM, complété du nom
 du lead s'il ne le cite pas (« Appel · Camille Dubreuil ») ; sans libellé, l'étape (« R1 », « Relance »).

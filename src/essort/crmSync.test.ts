@@ -1,7 +1,7 @@
 import type { Client } from 'discord.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EssortBoardRow, EssortTaskRow } from '../db/essortRepository';
-import type { CrmData } from './crm';
+import type { EssortBoardRow, EssortSpanRow, EssortTaskRow } from '../db/essortRepository';
+import type { CrmData, CrmTache } from './crm';
 
 // Deux tableaux configurés, quel que soit le .env de la machine.
 vi.hoisted(() => {
@@ -15,8 +15,12 @@ vi.hoisted(() => {
 const db = vi.hoisted(() => ({
   boards: [] as EssortBoardRow[],
   tasks: [] as EssortTaskRow[],
+  spans: [] as EssortSpanRow[],
   nextId: 1,
   crm: { actions: [], taches: [] } as CrmData,
+  /** Ce que le bot a écrit dans le CRM, et s'il répond. */
+  crmLog: [] as unknown[][],
+  crmDown: false,
 }));
 
 vi.mock('../db/essortRepository', () => {
@@ -24,10 +28,71 @@ vi.mock('../db/essortRepository', () => {
     const b = db.boards.find((x) => x.id === t.board_id)!;
     return { ...t, essort_boards: { person: b.person, board_date: b.board_date } };
   };
+  const getBoard = async (person: string, date: string) =>
+    db.boards.find((b) => b.person === person && b.board_date === date) ?? null;
   return {
-    getBoard: async (person: string, date: string) =>
-      db.boards.find((b) => b.person === person && b.board_date === date) ?? null,
+    getBoard,
     getBoardById: async (id: number) => db.boards.find((b) => b.id === id) ?? null,
+    ensureBoard: async (person: EssortBoardRow['person'], date: string, channelId: string) => {
+      const existing = await getBoard(person, date);
+      if (existing) return { board: existing, created: false };
+      const board = {
+        id: db.nextId++,
+        person,
+        board_date: date,
+        channel_id: channelId,
+        message_id: null,
+        week_message_id: null,
+        evening_message_id: null,
+        evening_answered_at: null,
+        extras: {},
+        read_at: null,
+        archived_at: null,
+        created_at: '',
+      } as EssortBoardRow;
+      db.boards.push(board);
+      return { board, created: true };
+    },
+    moveTask: async (id: number, boardId: number, position: number, carriedFrom: number | null) => {
+      const row = db.tasks.find((t) => t.id === id)!;
+      Object.assign(row, { board_id: boardId, position, carried_from: carriedFrom, pings_sent: 0 });
+    },
+    listBoardsToArchive: async () => [],
+    addSpan: async (span: Partial<EssortSpanRow>) => {
+      const row = {
+        id: db.nextId++,
+        shared: false,
+        start_time: null,
+        end_date: null,
+        end_time: null,
+        done_at: null,
+        done_by: null,
+        dismissed_at: null,
+        asked_at: null,
+        ask_message_id: null,
+        crm_ref: null,
+        created_at: '',
+        ...span,
+      } as EssortSpanRow;
+      db.spans.push(row);
+      return row;
+    },
+    getSpan: async (id: number) => db.spans.find((s) => s.id === id) ?? null,
+    updateSpan: async (id: number, patch: Partial<EssortSpanRow>) => {
+      const row = db.spans.find((s) => s.id === id);
+      if (row) Object.assign(row, patch);
+      return row ? { ...row } : null;
+    },
+    listOpenSpans: async (person?: string) =>
+      db.spans.filter(
+        (s) =>
+          !s.done_at &&
+          !s.dismissed_at &&
+          (person === undefined || s.person === person || s.shared),
+      ),
+    listCrmSpans: async () => db.spans.filter((s) => s.crm_ref),
+    listSpanRows: async (spanId: number) =>
+      db.tasks.filter((t) => t.span_id === spanId && !t.dismissed_at).map(withBoard),
     updateBoard: async (id: number, patch: Partial<EssortBoardRow>) => {
       const board = db.boards.find((b) => b.id === id);
       if (board) Object.assign(board, patch);
@@ -73,7 +138,6 @@ vi.mock('../db/essortRepository', () => {
     listAirtableTasksFor: async (ids: string[]) =>
       db.tasks.filter((t) => t.source === 'airtable' && ids.includes(t.record_id ?? '')),
     listTasksToSync: async () => [],
-    listOpenSpans: async () => [],
     listPlannedTasks: async (person: string, from: string, to: string) =>
       db.tasks
         .filter((t) => !t.dismissed_at)
@@ -99,12 +163,33 @@ vi.mock('../lib/calendar', () => ({
   listEvents: async () => [],
   updateEvent: async () => undefined,
 }));
-vi.mock('./crm', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./crm')>()),
-  fetchCrm: async () => db.crm,
-}));
+vi.mock('./crm', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./crm')>();
+  const ecrire = (...call: unknown[]) => {
+    if (db.crmDown) throw new Error(original.CRM_INJOIGNABLE);
+    db.crmLog.push(call);
+  };
+  return {
+    ...original,
+    fetchCrm: async () => structuredClone(db.crm),
+    crmTaches: {
+      creer: async (t: unknown) => {
+        ecrire('creer', t);
+        return `t${db.crmLog.length}`;
+      },
+      modifier: async (id: string, patch: unknown) => {
+        ecrire('modifier', id, patch);
+        return true;
+      },
+      supprimer: async (id: string) => {
+        ecrire('supprimer', id);
+      },
+    },
+  };
+});
 
-const { syncFromCrm } = await import('./service');
+const service = await import('./service');
+const { syncFromCrm } = service;
 
 // Un faux Discord : ce qui part dans chaque salon, et les messages modifiés.
 const sent: { channel: string; content: string }[] = [];
@@ -164,7 +249,10 @@ const pings = (channel: string) =>
 beforeEach(() => {
   db.boards = [];
   db.tasks = [];
+  db.spans = [];
   db.crm = { actions: [], taches: [] };
+  db.crmLog = [];
+  db.crmDown = false;
   sent.length = 0;
   edits.length = 0;
   vi.useFakeTimers();
@@ -301,5 +389,239 @@ describe('synchro avec le CRM', () => {
     expect(rowsOf(enzo).map((t) => t.label)).toEqual(['R1 avec Lucie']);
     await vi.advanceTimersByTimeAsync(4 * 60 * 60_000);
     expect(pings('salon-enzo')).toHaveLength(3);
+  });
+});
+
+/** Une tâche du calendrier du CRM, telle que la route la donne. */
+const tache = (partial: Partial<CrmTache>): CrmTache => ({
+  id: 't-video',
+  titre: 'Tourner la vidéo coachs',
+  note: null,
+  jour: today,
+  heure: '15:00',
+  duree_minutes: 30,
+  responsable: 'Loys',
+  lead_id: null,
+  lead_nom: null,
+  lead_cabinet: null,
+  lead_telephone: null,
+  ...partial,
+});
+
+/** Cinq minutes plus tard : la synchro suivante. */
+const later = () => vi.advanceTimersByTimeAsync(5 * 60_000);
+
+describe('calendrier du CRM et Discord, dans les deux sens', () => {
+  it('une tâche du calendrier arrive chez son responsable, et se coche quand le CRM la coche', async () => {
+    const loys = published('Loys');
+    const enzo = published('Enzo');
+    db.crm.taches.push(tache({}));
+    await syncFromCrm(client);
+    expect(rowsOf(loys)).toEqual([
+      expect.objectContaining({
+        record_id: 'tache:t-video',
+        label: 'Tourner la vidéo coachs',
+        due_time: '15:00',
+        is_done: false,
+      }),
+    ]);
+    expect(rowsOf(enzo)).toEqual([]);
+
+    db.crm.taches[0]!.fait = true;
+    await later();
+    await syncFromCrm(client);
+    expect(rowsOf(loys)[0]).toMatchObject({ is_done: true, done_by: 'CRM' });
+  });
+
+  it('cochée sur Discord, elle l’est dans le CRM ; une lecture commencée avant ne la décoche pas', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.taches.push(tache({}));
+    const before = Date.now();
+    await syncFromCrm(client);
+    await later();
+    const row = rowsOf(loys)[0]!;
+    await service.toggleTasks(client, loys, [row.id], 'Loys');
+    expect(db.crmLog).toEqual([['modifier', 't-video', { fait: true }]]);
+    expect(row.is_done).toBe(true);
+
+    // Une lecture partie avant le clic dit encore « pas faite » : on ne la croit pas.
+    const { buildCrmAgenda } = await import('./crm');
+    const stale = { ...buildCrmAgenda(db.crm, today), readAt: before };
+    await service.reconcile(loys, stale);
+    expect(row.is_done).toBe(true);
+  });
+
+  it('ajoutée sur Discord, elle va dans le calendrier du CRM, sans doublon ni annonce', async () => {
+    const enzo = published('Enzo');
+    published('Loys');
+    await syncFromCrm(client);
+    await later();
+
+    await service.planTask(client, enzo, today, 'Envoyer la brochure à Théo', '15:00');
+    expect(db.crmLog).toEqual([
+      [
+        'creer',
+        { titre: 'Envoyer la brochure à Théo', jour: today, heure: '15:00', responsable: 'Enzo' },
+      ],
+    ]);
+    expect(rowsOf(enzo)).toEqual([
+      expect.objectContaining({ record_id: 'tache:t1', label: 'Envoyer la brochure à Théo' }),
+    ]);
+
+    // Le CRM la contient maintenant : la synchro suivante la retrouve, sans la doubler ni l'annoncer.
+    db.crm.taches.push(
+      tache({ id: 't1', titre: 'Envoyer la brochure à Théo', responsable: 'Enzo' }),
+    );
+    sent.length = 0;
+    await later();
+    await syncFromCrm(client);
+    expect(rowsOf(enzo).map((t) => t.label)).toEqual(['Envoyer la brochure à Théo']);
+    expect(sent.filter((s) => s.content.startsWith('Agenda mis à jour'))).toEqual([]);
+  });
+
+  it('sans réponse du CRM, rien n’est ajouté ni coché, et la personne le voit', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.taches.push(tache({}));
+    await syncFromCrm(client);
+    db.crmDown = true;
+    await expect(
+      service.planTask(client, loys, today, 'Appeler le comptable', null),
+    ).rejects.toThrow(/CRM n’a pas répondu/);
+    const row = rowsOf(loys)[0]!;
+    await expect(service.toggleTasks(client, loys, [row.id], 'Loys')).rejects.toThrow(
+      /CRM n’a pas répondu/,
+    );
+    expect(rowsOf(loys)).toHaveLength(1);
+    expect(row.is_done).toBe(false);
+  });
+
+  it('retirée sur Discord, elle est supprimée du calendrier du CRM', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.taches.push(tache({}));
+    await syncFromCrm(client);
+    await service.removeTasks(client, loys, [rowsOf(loys)[0]!.id]);
+    expect(db.crmLog).toEqual([['supprimer', 't-video']]);
+    expect(rowsOf(loys)).toEqual([]);
+  });
+
+  it('reportée le soir, elle change de jour dans le CRM', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.taches.push(tache({}));
+    await syncFromCrm(client);
+    const row = rowsOf(loys)[0]!;
+    await service.toggleCarry(client, loys, [row.id]);
+    expect(db.crmLog).toEqual([['modifier', 't-video', { jour: '2026-10-29' }]]);
+    expect(row.signature?.endsWith('|2026-10-29')).toBe(true);
+    expect(rowsOf(loys)).toEqual([]);
+  });
+
+  it('une tâche permanente du CRM est une tâche permanente de Discord, jusqu’à ce qu’elle soit faite', async () => {
+    const enzo = published('Enzo');
+    published('Loys');
+    db.crm.taches.push(
+      tache({
+        id: 't-devis',
+        titre: 'Relancer les devis',
+        responsable: 'Enzo',
+        jour: '2026-10-27',
+        heure: null,
+        permanente: true,
+      }),
+    );
+    await syncFromCrm(client);
+    expect(db.spans).toEqual([
+      expect.objectContaining({
+        crm_ref: 't-devis',
+        kind: 'permanent',
+        person: 'Enzo',
+        shared: false,
+        label: 'Relancer les devis',
+      }),
+    ]);
+    expect(rowsOf(enzo).map((t) => t.label)).toEqual(['Relancer les devis']);
+
+    db.crm.taches[0]!.fait = true;
+    await later();
+    await syncFromCrm(client);
+    expect(db.spans[0]).toMatchObject({ done_by: 'CRM' });
+    expect(db.spans[0]!.done_at).not.toBeNull();
+  });
+
+  it('une période sans responsable est pour toute l’équipe ; supprimée du CRM, elle part', async () => {
+    const loys = published('Loys');
+    const enzo = published('Enzo');
+    db.crm.taches.push(
+      tache({
+        id: 't-salon',
+        titre: 'Salon de l’habitat',
+        responsable: null,
+        heure: '09:00',
+        fin_jour: '2026-10-30',
+        fin_heure: '19:00',
+      }),
+    );
+    await syncFromCrm(client);
+    expect(db.spans).toEqual([
+      expect.objectContaining({
+        crm_ref: 't-salon',
+        kind: 'period',
+        shared: true,
+        end_date: '2026-10-30',
+        end_time: '19:00',
+      }),
+    ]);
+    expect(rowsOf(loys).map((t) => t.label)).toEqual(['Salon de l’habitat']);
+    expect(rowsOf(enzo).map((t) => t.label)).toEqual(['Salon de l’habitat']);
+
+    db.crm.taches = [];
+    await later();
+    await syncFromCrm(client);
+    expect(db.spans[0]!.dismissed_at).not.toBeNull();
+    expect(rowsOf(loys)).toEqual([]);
+  });
+
+  it('créée sur Discord pour les deux, une tâche permanente va dans le CRM sans responsable', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    await service.createSpan(client, loys, {
+      kind: 'permanent',
+      shared: true,
+      label: 'Publier un reel',
+      start: { date: today, time: null },
+      end: null,
+    });
+    expect(db.crmLog).toEqual([
+      [
+        'creer',
+        {
+          titre: 'Publier un reel',
+          jour: today,
+          heure: null,
+          responsable: null,
+          permanente: true,
+          fin_jour: null,
+          fin_heure: null,
+        },
+      ],
+    ]);
+    expect(db.spans).toEqual([expect.objectContaining({ crm_ref: 't1', shared: true })]);
+
+    // Relue dans le CRM, c'est la même : pas de seconde tâche.
+    db.crm.taches.push(
+      tache({
+        id: 't1',
+        titre: 'Publier un reel',
+        responsable: null,
+        heure: null,
+        permanente: true,
+      }),
+    );
+    await later();
+    await syncFromCrm(client);
+    expect(db.spans).toHaveLength(1);
   });
 });
