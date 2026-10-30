@@ -66,6 +66,7 @@ npm run dev               # tsx watch
 | `AIRTABLE_TOKEN` / `AIRTABLE_BASE_ID` / `AIRTABLE_LEADS_TABLE` | (ancienne source, plus lue depuis le 28/10/2026) |
 | `ESSORT_CRON` | (Essort) par défaut `0 6 * * *` (6h, heure de Paris) |
 | `ESSORT_SYNC_CRON` | (Essort) synchro avec le CRM et la base, par défaut `*/5 * * * *` (toutes les 5 minutes) |
+| `ESSORT_NUDGE_CRON` | (Essort) rappel des tâches du jour pas encore faites, par défaut `0 18 * * *` (18h) |
 | `ESSORT_EVENING_CRON` | (Essort) question « reporter à demain ? », par défaut `0 19 * * *` (19h) |
 | `ESSORT_LOYS_CHANNEL_ID` / `ESSORT_ENZO_CHANNEL_ID` | (Essort) salon de chaque tableau ; sans salon, pas de tableau |
 | `ESSORT_LOYS_USER_ID` / `ESSORT_ENZO_USER_ID` | (Essort) pour mentionner la personne et réserver les boutons à l'équipe |
@@ -225,6 +226,11 @@ cabinet ou la note, et le téléphone. Les rappels du jour sont listés dessous.
   et heure ; changer de jour déplace la tâche, changer d'heure reprogramme ses pings), **🗑️ Retirer**
   n'importe quelle tâche. Pour une tâche du calendrier ou l'action d'une fiche, chacun de ces gestes
   est écrit dans le CRM (ci-dessus).
+- **À 18h, un rappel** : chaque personne qui a encore des tâches du jour à faire est taguée dans son
+  salon (« 🔔 @Loys Encore 2 tâches à faire aujourd'hui : »), avec leur numéro de bouton et un lien
+  vers le message du jour. Comptent les tâches sans heure et celles dont l'heure est passée (les
+  suivantes ont leurs pings), pas les permanentes ni les périodes. Une tâche partagée (une fiche
+  suivie à deux) le rappelle à chacun. Rien à faire : pas de message. Une seule fois par jour.
 - **Rien n'est reporté automatiquement.** À 19h, s'il reste des tâches non faites, le bot
   tague la personne et demande lesquelles passer au lendemain : un bouton numéroté par tâche
   (un clic la reporte, un second annule, autant qu'on veut), puis « Terminé », ou « Tout
@@ -241,7 +247,8 @@ cabinet ou la note, et le téléphone. Les rappels du jour sont listés dessous.
 du CRM qui dit la même chose (même jour, nom du lead ou de son cabinet dans le texte, et même heure à
 15 min près, ou deux rendez-vous « rdv / visio / appel » dont l'un n'a pas d'heure). L'action du CRM
 n'est alors ni ajoutée, ni montrée dans la semaine, ni annoncée, et ne sonne pas. Les fiches perdues
-sont ignorées. Bot redémarré après 6h (ou 19h) : ce qui manque est publié au démarrage, les pings du
+sont ignorées. Bot redémarré après 6h (18h ou 19h) : ce qui manque est publié au démarrage (le rappel de 18h
+jusqu'à 19h seulement), les pings du
 jour sont reprogrammés.
 
 ### Agenda Google

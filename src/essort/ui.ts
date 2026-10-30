@@ -595,6 +595,27 @@ export function spanWhen(span: EssortSpanRow): string {
 }
 
 // ---------------------------------------------------------------------------
+// 18h : ce qui reste à faire
+// ---------------------------------------------------------------------------
+
+/**
+ * Le rappel de 18h : les tâches du jour pas encore faites, sous le numéro de
+ * leur bouton dans le message du jour, où on les coche.
+ */
+export function nudgeMessage(
+  mention: string | null,
+  open: { task: EssortTaskRow; position: number }[],
+  dayLink: string | null,
+): string {
+  const count = open.length === 1 ? '1 tâche' : `${open.length} tâches`;
+  const head = `🔔 ${mention ? `${mention} ` : ''}Encore ${count} à faire aujourd’hui :`;
+  const where = dayLink ? `\nÀ cocher dans le [message du jour](${dayLink}).` : '';
+  const lines = open.map(({ task, position }) => `**${position}.** ${timed(task.due_time, task.label)}`);
+  // 2 000 caractères au plus dans un message Discord.
+  return `${head}\n${truncate(lines.join('\n'), 1800 - head.length)}${where}`;
+}
+
+// ---------------------------------------------------------------------------
 // 19h : « Reporter à demain ? »
 // ---------------------------------------------------------------------------
 

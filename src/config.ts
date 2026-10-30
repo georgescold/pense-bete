@@ -43,6 +43,9 @@ const schema = z.object({
   // les messages du jour (sans mention) et le bot dit en une ligne ce qu'il a
   // compris. Une tâche posée en base par une autre voie suit au même rythme.
   ESSORT_SYNC_CRON: z.string().default('*/5 * * * *'),
+  // En fin de journée, chaque personne qui a encore des tâches du jour à faire
+  // est mentionnée dans son salon, une fois (Loys, 30/10).
+  ESSORT_NUDGE_CRON: z.string().default('0 18 * * *'),
   // Le soir, le bot demande quelles tâches non faites passer au lendemain.
   // Rien n'est jamais reporté sans réponse.
   ESSORT_EVENING_CRON: z.string().default('0 19 * * *'),

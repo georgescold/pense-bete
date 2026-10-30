@@ -14,6 +14,8 @@ export interface BoardExtras {
   }[];
   /** Dernière lecture du CRM en échec : la liste est incomplète. */
   crmError?: boolean;
+  /** Rappel de 18h envoyé (une seule fois par jour, même après un redémarrage). */
+  nudgedAt?: string;
 }
 
 export interface EssortBoardRow {

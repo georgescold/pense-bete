@@ -179,6 +179,7 @@ const {
   createSpan,
   editSpan,
   futureSpans,
+  nudgeOpenTasks,
   placeSpans,
   removeTasks,
   reportSpan,
@@ -525,5 +526,42 @@ describe('tâche pour toute l’équipe', () => {
     await answerSpan(client, span.id, 'done', 'Enzo', sent[0]!.id);
     expect(rowsOf(enzo)).toMatchObject([{ is_done: true, done_by: 'Enzo' }]);
     expect(rowsOf(loys)).toEqual([]);
+  });
+});
+
+describe('rappel de 18h', () => {
+  it('mentionne qui a encore des tâches du jour, une seule fois', async () => {
+    vi.setSystemTime(paris('2026-10-19', '18:00'));
+    const { addTask } = await import('../db/essortRepository');
+    const loys = await board('2026-10-19', true, 'Loys');
+    const enzo = await board('2026-10-19', true, 'Enzo');
+    await addTask({ board_id: loys.id, source: 'manual', label: 'Appel fait', position: 1, is_done: true });
+    await addTask({ board_id: loys.id, source: 'manual', label: 'Envoyer le doc Notion', position: 2 });
+    await addTask({ board_id: loys.id, source: 'manual', label: 'R1 du soir', due_time: '20:00', position: 3 });
+    await addTask({ board_id: loys.id, source: 'manual', label: 'Relancer Paul', due_time: '11:00', position: 4 });
+    await createSpan(client, loys, {
+      kind: 'permanent',
+      label: 'Relancer les devis',
+      start: { date: '2026-10-19', time: null },
+      end: null,
+    });
+    await addTask({ board_id: enzo.id, source: 'manual', label: 'Tout fait', is_done: true });
+    sent.length = 0;
+
+    await nudgeOpenTasks(client);
+    // Enzo a tout fait : rien pour lui. Pour Loys, sous les numéros du jour (les
+    // heures fixes d’abord) : ni la tâche faite, ni celle de 20h (elle a ses
+    // pings), ni la permanente.
+    expect(sent).toHaveLength(1);
+    const { essortMembers } = await import('../config');
+    const userId = essortMembers.find((m) => m.person === 'Loys')?.userId;
+    expect(sent[0]!.content).toBe(
+      `🔔 ${userId ? `<@${userId}> ` : ''}Encore 2 tâches à faire aujourd’hui :\n` +
+        '**1.** `11:00` Relancer Paul\n**4.** Envoyer le doc Notion',
+    );
+
+    // Un redémarrage avant 19h ne le renvoie pas.
+    await nudgeOpenTasks(client);
+    expect(sent).toHaveLength(1);
   });
 });

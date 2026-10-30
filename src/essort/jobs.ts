@@ -7,6 +7,7 @@ import { onRemindersChanged } from '../lib/reminderEvents';
 import {
   askCarryOver,
   askEndedSpans,
+  nudgeOpenTasks,
   publishBoards,
   refreshForUser,
   restoreTodayPings,
@@ -18,7 +19,8 @@ import {
  * Tous les jours à 6h (heure de Paris), dans le salon de chaque personne : le
  * planning de la semaine puis le message du jour. Le CRM est relu toutes les
  * 5 minutes : un changement dans le CRM (ou une tâche posée en base) met à
- * jour ces messages et le bot dit ce qu'il a compris. À 19h, s'il reste des tâches,
+ * jour ces messages et le bot dit ce qu'il a compris. À 18h, chaque personne qui
+ * a encore des tâches du jour à faire est mentionnée. À 19h, s'il en reste,
  * le bot demande lesquelles reporter au lendemain (rien n'est reporté seul).
  * À la fin d'une tâche sur une période, il demande si elle a pu être faite.
  *
@@ -29,6 +31,7 @@ export function startEssortJobs(client: Client): void {
   for (const [expr, label] of [
     [config.ESSORT_CRON, 'ESSORT_CRON'],
     [config.ESSORT_SYNC_CRON, 'ESSORT_SYNC_CRON'],
+    [config.ESSORT_NUDGE_CRON, 'ESSORT_NUDGE_CRON'],
     [config.ESSORT_EVENING_CRON, 'ESSORT_EVENING_CRON'],
     [config.ESSORT_SPAN_CRON, 'ESSORT_SPAN_CRON'],
   ] as const) {
@@ -51,6 +54,14 @@ export function startEssortJobs(client: Client): void {
     config.ESSORT_SYNC_CRON,
     () => {
       void syncFromCrm(client).catch((err) => logger.error({ err }, 'synchro CRM en echec'));
+    },
+    { timezone: config.TIMEZONE },
+  );
+
+  cron.schedule(
+    config.ESSORT_NUDGE_CRON,
+    () => {
+      void withRetries('rappel de 18h', () => nudgeOpenTasks(client));
     },
     { timezone: config.TIMEZONE },
   );
@@ -79,6 +90,7 @@ export function startEssortJobs(client: Client): void {
     {
       cron: config.ESSORT_CRON,
       sync: config.ESSORT_SYNC_CRON,
+      nudge: config.ESSORT_NUDGE_CRON,
       evening: config.ESSORT_EVENING_CRON,
       spans: config.ESSORT_SPAN_CRON,
       tz: config.TIMEZONE,
@@ -93,6 +105,10 @@ export function startEssortJobs(client: Client): void {
   // messages du jour suivent aussitôt.
   if (hasFiredToday(config.ESSORT_CRON)) {
     void withRetries('rattrapage Essort', () => publishBoards(client));
+  }
+  // Le rappel de 18h manqué part au démarrage, jusqu'à la question du soir.
+  if (hasFiredToday(config.ESSORT_NUDGE_CRON) && !hasFiredToday(config.ESSORT_EVENING_CRON)) {
+    void withRetries('rattrapage rappel de 18h', () => nudgeOpenTasks(client));
   }
   // Idem pour la question du soir : posée une seule fois par jour.
   if (hasFiredToday(config.ESSORT_EVENING_CRON)) {

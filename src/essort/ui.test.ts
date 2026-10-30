@@ -10,6 +10,7 @@ import {
   buildWeekEmbed,
   dayIntro,
   dayOrder,
+  nudgeMessage,
 } from './ui';
 import { parseTimeInput } from './planner';
 
@@ -242,5 +243,30 @@ describe('question du soir', () => {
       'Rien n’a été reporté : les tâches restent sur aujourd’hui.',
     );
     expect(eveningSummary([], false)).toBe('Sans réponse : rien n’a été reporté.');
+  });
+});
+
+describe('rappel de 18h', () => {
+  it('mentionne, liste sous les numéros du jour et mène au message du jour', () => {
+    const open = [
+      { task: task(1, { label: 'Appeler Paul', due_time: '11:00' }), position: 1 },
+      { task: task(3, { label: 'Envoyer le doc Notion' }), position: 3 },
+    ];
+    expect(nudgeMessage('<@1>', open, 'https://discord.com/channels/g/c/m')).toBe(
+      '🔔 <@1> Encore 2 tâches à faire aujourd’hui :\n' +
+        '**1.** `11:00` Appeler Paul\n**3.** Envoyer le doc Notion\n' +
+        'À cocher dans le [message du jour](https://discord.com/channels/g/c/m).',
+    );
+  });
+
+  it('une seule tâche, sans mention ni lien', () => {
+    expect(nudgeMessage(null, [{ task: task(2, { label: 'Devis' }), position: 2 }], null)).toBe(
+      '🔔 Encore 1 tâche à faire aujourd’hui :\n**2.** Devis',
+    );
+  });
+
+  it('tient dans un message Discord', () => {
+    const open = Array.from({ length: 60 }, (_, i) => ({ task: task(i + 1), position: i + 1 }));
+    expect(nudgeMessage('<@1>', open, 'https://discord.com/channels/g/c/m').length).toBeLessThanOrEqual(2000);
   });
 });

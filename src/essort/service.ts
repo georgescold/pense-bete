@@ -86,6 +86,7 @@ import {
   buildWeekEmbed,
   dayIntro,
   dayOrder,
+  nudgeMessage,
   type TimedLine,
   type WeekItem,
 } from './ui';
@@ -364,7 +365,7 @@ export async function reconcile(board: EssortBoardRow, agenda: Agenda | null): P
   }
 
   await updateBoard(board.id, {
-    extras: { upcoming: plan.upcoming, crmError: false },
+    extras: { ...board.extras, upcoming: plan.upcoming, crmError: false },
     read_at: new Date().toISOString(),
   });
 }
@@ -655,7 +656,7 @@ async function publishBoard(
     // qui est dû. Rien n'est repris de la veille : seul ce qui a été reporté
     // à 19h est déjà sur le tableau du jour.
     await archivePastBoards(client, member.person, date);
-    await reconcile(board, agenda);
+    await reconcile((await getBoardById(board.id)) ?? board, agenda);
     await placeSpans(board);
     if (agenda) await pruneFutureCrmTasks(member.person, date, agenda);
     await replaceLoneDayMessage(client, board);
@@ -1169,6 +1170,59 @@ async function refreshTwins(
       logger.warn({ err, person: m.person }, 'tableau de l autre non rafraichi'),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 18h : rappel des tâches du jour pas encore faites
+// ---------------------------------------------------------------------------
+
+/**
+ * Chaque personne qui a encore des tâches du jour à faire est mentionnée dans
+ * son salon ; une tâche partagée la rappelle donc à chacun. Comptent les tâches
+ * sans heure et celles dont l'heure est passée (les suivantes ont leurs pings),
+ * pas les permanentes ni les périodes, qui ont leur propre question. Une seule
+ * fois par jour, même après un redémarrage.
+ */
+export async function nudgeOpenTasks(client: Client): Promise<void> {
+  const date = essortToday();
+  const failures: unknown[] = [];
+  for (const m of essortMembers) {
+    try {
+      const board = await getBoard(m.person, date);
+      if (!board || board.archived_at || board.extras?.nudgedAt) continue;
+      await withBoardLock(board.id, async () => {
+        const fresh = (await getBoardById(board.id)) ?? board;
+        if (fresh.extras?.nudgedAt) return;
+        const now = parisDateTime(new Date()).time;
+        // Les numéros sont ceux des boutons du message du jour.
+        const open = dayOrder(await listTasks(fresh.id))
+          .map((task, i) => ({ task, position: i + 1 }))
+          .filter(
+            ({ task }) =>
+              !task.is_done && !task.span_id && (!task.due_time || task.due_time < now),
+          );
+        if (open.length === 0) return;
+        const channel = await fetchChannel(client, fresh.channel_id);
+        if (!channel) return;
+        const userId = memberOf(fresh.person)?.userId ?? null;
+        const link = 'url' in channel && channel.url && fresh.message_id
+          ? `${channel.url}/${fresh.message_id}`
+          : null;
+        await channel.send({
+          content: nudgeMessage(userId ? userMention(userId) : null, open, link),
+          allowedMentions: { users: userId ? [userId] : [] },
+        });
+        await updateBoard(fresh.id, {
+          extras: { ...fresh.extras, nudgedAt: new Date().toISOString() },
+        });
+        logger.info({ person: m.person, open: open.length }, 'rappel de 18h envoye');
+      });
+    } catch (err) {
+      logger.error({ err, person: m.person }, 'rappel de 18h non envoye');
+      failures.push(err);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
 }
 
 // ---------------------------------------------------------------------------
