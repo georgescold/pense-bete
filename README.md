@@ -191,9 +191,10 @@ retire de son côté). Un autre prénom : aucun tableau. Le libellé est celui d
 du lead s'il ne le cite pas (« Appel · Camille Dubreuil ») ; sans libellé, l'étape (« R1 », « Relance »).
 Dessous : le cabinet, la note d'une tâche, le téléphone s'il faut appeler (et qu'il n'est pas déjà
 dans le libellé). Une action dont la date est **passée n'est jamais remise** sur le tableau du jour
-(Loys, 29/10) : on la redate dans le CRM, ou on la reporte le soir sur Discord. ⚠️ Le CRM propose
-10 h par défaut pour une relance : une relance à venir laissée à 10 h sonne donc à 9 h, 9 h 30 et
-9 h 50.
+(Loys, 29/10) : on la redate dans le CRM, ou on la reporte le soir sur Discord. Depuis le 30/10,
+le CRM propose 00:00 par défaut pour toute action ou tâche, c'est-à-dire **toute la journée** : elle
+est sur le tableau de son jour, sans ping ; une heure choisie la fait sonner 1 h, 30 min et 10 min
+avant.
 
 Pour voir ce que le bot posera, sans rien écrire (ni Discord, ni base) :
 
