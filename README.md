@@ -142,7 +142,7 @@ concernés (ils se redéclenchent d'eux-mêmes).
 Depuis le 28/10/2026 le bot lit le **CRM** (crm.essort.agency, espace « ESSORT · Leads du site »)
 et non plus la table « Leads » d'Airtable, qui n'est plus tenue à jour.
 
-Chaque jour à 6h, le bot lit le CRM (**sans jamais y écrire**) et poste deux messages dans le salon
+Chaque jour à 6h, le bot lit le CRM et poste deux messages dans le salon
 de chaque personne (le **responsable** de la fiche ou de la tâche : Loys ou Enzo). Il relit le CRM
 toutes les 5 minutes : dès qu'une action change dans le CRM (après un rendez-vous client,
 notamment), les messages sont mis à jour sans nouvelle mention et le bot écrit en une ligne ce
@@ -171,8 +171,19 @@ source des tâches ; Discord en est une vue qui y écrit, par `/api/pense-bete/t
 - une tâche du calendrier l'emporte sur la prochaine action d'une fiche qui dit la même chose ;
 - ce qu'on vient de faire sur Discord n'est ni défait par une lecture du CRM commencée avant, ni
   annoncé comme « mis à jour depuis le CRM » ;
-- les **prochaines actions des fiches**, elles, ne s'écrivent que dans le CRM ; les tâches créées
-  sur Discord avant le 29/10 restent sur Discord seulement.
+- les tâches créées sur Discord avant le 29/10 restent sur Discord seulement.
+
+**La prochaine action d'une fiche, dans les deux sens aussi** (Loys, 30/10 : « tout doit être mis à
+jour en interdépendance »), par `/api/pense-bete/actions` (même secret) :
+- **✔️ cochée** sur Discord : elle est honorée dans le CRM, comme un contact (note « Fait : … (coché
+  sur Discord par Loys) » dans l'historique, la fiche n'a plus de prochaine action : « à
+  planifier ») ; **décochée**, l'action revient dans le CRM, si rien n'a été programmé entre-temps ;
+- **✏️ modifiée** (texte, jour, heure) ou **reportée le soir** : la fiche change de jour, d'heure ou
+  de texte dans le CRM (le texte seulement s'il a été changé) ;
+- **🗑️ retirée** : une note, et la fiche n'a plus de prochaine action ;
+- posée sur les **deux tableaux** (« Enzo et Loys ») : le tableau de l'autre suit aussitôt ;
+- le CRM n'efface que l'action que Discord montrait (même jour, même heure) : s'il a programmé autre
+  chose entre-temps, il l'emporte. Sans réponse du CRM, rien ne change et la personne le voit.
 
 Sans responsable (une tâche « Les deux », une fiche jamais attribuée) : le seul prénom de l'équipe
 cité dans le texte (« R1 · Enzo appelle Lucie »), sinon **les deux tableaux** (chacun la coche ou la
@@ -198,9 +209,8 @@ les deux tableaux).
 planifiées, rappels, chacun à son heure.
 - **➕ Planifier** : un jour (d'aujourd'hui à J+24), une tâche, une heure facultative.
 - **✏️ Modifier** : une tâche posée sur un jour à venir, ou une action du CRM de la semaine (pour
-  lui ajouter une heure, la changer de jour…) : texte, jour, heure, formulaire prérempli. L'action
-  du CRM devient alors une tâche de son jour, gardée telle quelle tant que le CRM ne change pas son
-  action ou sa date.
+  lui ajouter une heure, la changer de jour…) : texte, jour, heure, formulaire prérempli. La
+  modification est écrite dans le CRM.
 - **🗑️ Retirer** : une tâche planifiée sur un jour à venir.
 - **⏰ Rappels** : la liste de ses rappels ; ➕ en créer un (même formulaire que `/rappel ajouter`),
   ou en choisir un pour le mettre en pause, le réactiver ou le supprimer.
@@ -212,10 +222,8 @@ cabinet ou la note, et le téléphone. Les rappels du jour sont listés dessous.
   (décocher efface la ligne).
 - **➕ Ajouter** (heure facultative), **✏️ Modifier** (texte, jour — « demain », « lundi », « 12/10 » —
   et heure ; changer de jour déplace la tâche, changer d'heure reprogramme ses pings), **🗑️ Retirer**
-  n'importe quelle tâche. Une tâche du CRM modifiée ici garde la modification tant que son libellé
-  ou sa date ne changent pas dans le CRM. Une tâche du CRM retirée ou validée ici ne revient pas tant
-  que son libellé ou sa date ne changent pas dans le CRM (le bot n'écrit rien dans le CRM : la cocher
-  sur Discord ne la coche pas dans le CRM).
+  n'importe quelle tâche. Pour une tâche du calendrier ou l'action d'une fiche, chacun de ces gestes
+  est écrit dans le CRM (ci-dessus).
 - **Rien n'est reporté automatiquement.** À 19h, s'il reste des tâches non faites, le bot
   tague la personne et demande lesquelles passer au lendemain : un bouton numéroté par tâche
   (un clic la reporte, un second annule, autant qu'on veut), puis « Terminé », ou « Tout

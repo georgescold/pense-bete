@@ -38,12 +38,15 @@ import { appendRowsTo, clearRange, isSheetsConfigured } from '../lib/sheets';
 import { isCalendarConfigured } from '../lib/calendar';
 import {
   buildCrmAgenda,
+  crmActions,
+  crmLeadId,
   crmTacheId,
   crmTaches,
   fetchCrm,
   recordUrl,
   signatureOf,
   tacheRecordId,
+  type ActionMontree,
 } from './crm';
 import { followInCalendar } from './calendarSync';
 import {
@@ -162,14 +165,29 @@ async function readAgenda(date: string, delays: number[]): Promise<Agenda | null
  */
 const crmWrites = new Map<string, number>();
 
+/** La tâche du CRM, ou la fiche : les deux copies d'une chose posée sur les deux tableaux. */
+function writeKey(id: string): string {
+  return crmTacheId(id) ?? id.split('@')[0]!;
+}
+
 function noteCrmWrite(id: string): void {
-  crmWrites.set(crmTacheId(id) ?? id, Date.now());
+  crmWrites.set(writeKey(id), Date.now());
 }
 
 /** Écrite dans le CRM après le début de cette lecture : la lecture est en retard sur elle. */
 function writtenSince(id: string | null, readAt: number | undefined): boolean {
   if (!id || readAt === undefined) return false;
-  return (crmWrites.get(crmTacheId(id) ?? id) ?? 0) >= readAt;
+  return (crmWrites.get(writeKey(id)) ?? 0) >= readAt;
+}
+
+/** L'action d'une fiche, telle que la montre sa ligne sur le tableau de ce jour. */
+function shownAction(task: EssortTaskRow, date: string): ActionMontree {
+  return { jour: date, heure: task.due_time, libelle: task.label };
+}
+
+/** La fiche derrière une ligne du tableau : sa prochaine action se change dans le CRM. */
+function leadOf(task: EssortTaskRow): string | null {
+  return task.source === 'airtable' ? crmLeadId(task.record_id) : null;
 }
 
 /** Une ligne du tableau créée après le début de la lecture : la lecture ne la connaît pas encore. */
@@ -909,24 +927,29 @@ export async function planTask(
 /**
  * Modifie une tâche (texte, jour, heure) et renvoie son nouvel intitulé, ou
  * null si elle n'existe plus. Changer de jour la déplace sur le tableau de ce
- * jour ; changer d'heure reprogramme ses pings. Une tâche venue du CRM garde
- * la modification tant que l'action ou sa date ne changent pas dans le CRM.
+ * jour ; changer d'heure reprogramme ses pings. Une tâche du calendrier ou
+ * l'action d'une fiche est modifiée dans le CRM d'abord ; posée sur les deux
+ * tableaux, elle change aussitôt chez l'autre.
  */
-export function editTask(
+export async function editTask(
   client: Client,
   todayBoard: EssortBoardRow,
   taskId: number,
   change: { label: string; date: string; time: string | null },
 ): Promise<string | null> {
-  return withBoardLock(todayBoard.id, async () => {
+  let recordId: string | null = null;
+  const edited = await withBoardLock(todayBoard.id, async () => {
     const task = await getTask(taskId);
     // Une tâche permanente ou une période se modifie entière (`editSpan`).
     if (!task || task.dismissed_at || task.is_done || task.span_id) return null;
     const from = await getBoardById(task.board_id);
     if (!from || from.person !== todayBoard.person) return null;
 
-    // Une tâche du calendrier du CRM y est modifiée d'abord : il fait foi.
+    // Une tâche du calendrier du CRM y est modifiée d'abord : il fait foi. La
+    // prochaine action d'une fiche aussi (son texte seulement s'il a changé).
     const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : null;
+    const leadId = leadOf(task);
+    const labelChanged = change.label !== task.label;
     if (tacheId) {
       await crmTaches.modifier(tacheId, {
         titre: change.label,
@@ -934,7 +957,15 @@ export function editTask(
         heure: change.time,
       });
       noteCrmWrite(tacheId);
+    } else if (leadId) {
+      await crmActions.deplacer(leadId, todayBoard.person, {
+        jour: change.date,
+        heure: change.time,
+        ...(labelChanged ? { libelle: change.label } : {}),
+      });
+      noteCrmWrite(task.record_id!);
     }
+    recordId = task.record_id;
 
     if (change.date !== from.board_date) {
       const { board: target } = await ensureBoard(
@@ -949,12 +980,17 @@ export function editTask(
       label: change.label,
       due_time: change.time,
       ...(timeChanged ? { pings_sent: 0 } : {}),
-      // Une action de fiche garde la version de Discord tant que le CRM ne la
-      // change pas ; une tâche du calendrier, elle, vient d'être écrite dans le CRM.
+      // Écrite dans le CRM : la ligne prend la signature que le CRM lui donnera
+      // à la relecture (texte du CRM, nouveau jour).
       ...(tacheId
         ? { signature: signatureOf(change.label, change.date) }
-        : task.source === 'airtable'
-          ? { edited_at: new Date().toISOString() }
+        : leadId
+          ? {
+              signature: labelChanged
+                ? signatureOf(change.label, change.date)
+                : signatureOn(task.signature, change.date),
+              edited_at: null,
+            }
           : {}),
     });
 
@@ -966,20 +1002,28 @@ export function editTask(
     logger.info({ person: todayBoard.person, taskId, ...change }, 'tache Essort modifiee');
     return change.label;
   });
+  if (edited) await refreshTwins(client, [recordId], todayBoard.id);
+  return edited;
 }
 
 /**
  * Retire une tâche. Une tâche ajoutée à la main est supprimée ; une tâche du
- * calendrier du CRM y est supprimée aussi (d'abord) ; l'action d'une fiche est
- * seulement masquée, pour ne pas revenir aux relectures tant que l'action ou
- * la date du lead ne changent pas. Une ligne déjà écrite dans le Sheet est
- * effacée.
+ * calendrier du CRM y est supprimée aussi (d'abord) ; l'action d'une fiche y
+ * est retirée (une note, la fiche n'a plus de prochaine action), et la ligne
+ * reste masquée ici. Une ligne déjà écrite dans le Sheet est effacée.
  */
 async function dismissTask(task: EssortTaskRow): Promise<void> {
   const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : null;
+  const leadId = leadOf(task);
   if (tacheId) {
     await crmTaches.supprimer(tacheId);
     noteCrmWrite(tacheId);
+  } else if (leadId) {
+    const board = await getBoardById(task.board_id);
+    if (board) {
+      await crmActions.retirer(leadId, board.person, shownAction(task, board.board_date));
+      noteCrmWrite(task.record_id!);
+    }
   }
   // Décochée avant tout : plus aucune synchro ne la recopiera dans le Sheet.
   await updateTask(task.id, {
@@ -999,12 +1043,14 @@ export async function removeTasks(
   taskIds: number[],
 ): Promise<string[]> {
   const dropped: EssortSpanRow[] = [];
+  const records: (string | null)[] = [];
   const removed = await withBoardLock(board.id, async () => {
     const labels: string[] = [];
     for (const id of taskIds) {
       const task = await getTask(id);
       if (!task || task.board_id !== board.id || task.dismissed_at) continue;
       await dismissTask(task);
+      records.push(task.record_id);
       // Retirée pour de bon : elle ne revient pas les jours suivants (ni
       // chez l'autre, pour une tâche de toute l'équipe).
       const span = task.span_id ? await getSpan(task.span_id) : null;
@@ -1022,17 +1068,19 @@ export async function removeTasks(
     return labels;
   });
   await refreshSharedBoards(client, dropped, board.id);
+  await refreshTwins(client, records, board.id);
   return removed;
 }
 
 /** Retire des tâches posées sur des jours à venir (planifiées ou reportées). */
-export function unplanTasks(
+export async function unplanTasks(
   client: Client,
   todayBoard: EssortBoardRow,
   taskIds: number[],
 ): Promise<string[]> {
-  return withBoardLock(todayBoard.id, async () => {
-    const removed: string[] = [];
+  const records: (string | null)[] = [];
+  const removed = await withBoardLock(todayBoard.id, async () => {
+    const labels: string[] = [];
     for (const id of taskIds) {
       const task = await getTask(id);
       if (!task || task.dismissed_at) continue;
@@ -1040,14 +1088,17 @@ export function unplanTasks(
       if (!board || board.person !== todayBoard.person) continue;
       if (board.board_date <= todayBoard.board_date) continue;
       await dismissTask(task);
-      removed.push(task.label);
+      records.push(task.record_id);
+      labels.push(task.label);
     }
-    if (removed.length > 0) {
+    if (labels.length > 0) {
       await renderBoard(client, todayBoard.id, { day: false });
       calendarFollows();
     }
-    return removed;
+    return labels;
   });
+  await refreshTwins(client, records, todayBoard.id);
+  return removed;
 }
 
 export async function toggleTasks(
@@ -1057,6 +1108,7 @@ export async function toggleTasks(
   doneBy: string,
 ): Promise<void> {
   const spans: EssortSpanRow[] = [];
+  const records: (string | null)[] = [];
   await withBoardLock(board.id, async () => {
     for (const id of taskIds) {
       const task = await getTask(id);
@@ -1066,9 +1118,18 @@ export async function toggleTasks(
       // une tâche permanente ou une période aussi (sa ligne du jour la coche entière).
       const spanRef = task.span_id ? ((await getSpan(task.span_id))?.crm_ref ?? null) : null;
       const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : spanRef;
+      // L'action d'une fiche aussi : cochée, elle est honorée dans le CRM (une
+      // note, plus de prochaine action) ; décochée, elle y revient.
+      const leadId = leadOf(task);
       if (tacheId) {
         await crmTaches.modifier(tacheId, { fait: done });
         noteCrmWrite(tacheId);
+      } else if (leadId && !task.dismissed_at) {
+        const shown = shownAction(task, board.board_date);
+        if (done) await crmActions.fait(leadId, doneBy, shown);
+        else await crmActions.aFaire(leadId, doneBy, shown);
+        noteCrmWrite(task.record_id!);
+        records.push(task.record_id);
       }
       await updateTask(task.id, {
         is_done: done,
@@ -1085,6 +1146,29 @@ export async function toggleTasks(
   });
   // Une tâche de toute l'équipe cochée part du tableau de l'autre (et revient si décochée).
   await refreshSharedBoards(client, spans, board.id);
+  await refreshTwins(client, records, board.id);
+}
+
+/**
+ * L'action d'une fiche posée sur les deux tableaux (« Enzo et Loys »),
+ * changée depuis l'un : le tableau du jour de l'autre relit aussitôt le CRM,
+ * sans attendre la relecture des 5 minutes. Cochée ou retirée, elle y
+ * disparaît ; modifiée, elle y change.
+ */
+async function refreshTwins(
+  client: Client,
+  recordIds: (string | null)[],
+  fromBoardId: number,
+): Promise<void> {
+  if (!recordIds.some((r) => r?.includes('@') && crmLeadId(r))) return;
+  const date = essortToday();
+  for (const m of essortMembers) {
+    const other = await getBoard(m.person, date);
+    if (!other?.message_id || other.archived_at || other.id === fromBoardId) continue;
+    await refreshBoard(client, other).catch((err) =>
+      logger.warn({ err, person: m.person }, 'tableau de l autre non rafraichi'),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,11 +1270,19 @@ export function toggleCarry(
       const task = await getTask(id);
       if (!task || task.is_done || task.dismissed_at || task.span_id) continue;
       const tacheId = task.source === 'airtable' ? crmTacheId(task.record_id) : null;
-      // Une tâche du calendrier change de jour dans le CRM aussi (à la même heure).
+      const leadId = leadOf(task);
+      // Une tâche du calendrier, ou l'action d'une fiche, change de jour dans le
+      // CRM aussi (à la même heure).
       const moveInCrm = async (date: string): Promise<void> => {
-        if (!tacheId) return;
-        await crmTaches.modifier(tacheId, { jour: date });
-        noteCrmWrite(tacheId);
+        if (tacheId) {
+          await crmTaches.modifier(tacheId, { jour: date });
+          noteCrmWrite(tacheId);
+        } else if (leadId) {
+          await crmActions.deplacer(leadId, board.person, { jour: date, heure: task.due_time });
+          noteCrmWrite(task.record_id!);
+        } else {
+          return;
+        }
         await updateTask(task.id, { signature: signatureOn(task.signature, date) });
       };
       if (task.board_id === board.id) {

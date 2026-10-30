@@ -169,9 +169,45 @@ vi.mock('./crm', async (importOriginal) => {
     if (db.crmDown) throw new Error(original.CRM_INJOIGNABLE);
     db.crmLog.push(call);
   };
+  // Un faux CRM pour les prochaines actions : il fait ce que ferait la route.
+  const effacees = new Map<string, CrmData['actions'][number]>();
+  const effacer = (id: string) => {
+    const a = db.crm.actions.find((x) => x.id === id);
+    if (a) effacees.set(id, a);
+    db.crm.actions = db.crm.actions.filter((x) => x.id !== id);
+  };
   return {
     ...original,
     fetchCrm: async () => structuredClone(db.crm),
+    crmActions: {
+      fait: async (id: string, par: string, actuelle: unknown) => {
+        ecrire('fait', id, par, actuelle);
+        effacer(id);
+      },
+      aFaire: async (id: string, par: string, actuelle: unknown) => {
+        ecrire('a_faire', id, par, actuelle);
+        const a = effacees.get(id);
+        if (a && !db.crm.actions.some((x) => x.id === id)) db.crm.actions.push(a);
+      },
+      retirer: async (id: string, par: string, actuelle: unknown) => {
+        ecrire('retirer', id, par, actuelle);
+        effacer(id);
+      },
+      deplacer: async (
+        id: string,
+        par: string,
+        vers: { jour: string; heure: string | null; libelle?: string },
+      ) => {
+        ecrire('deplacer', id, par, vers);
+        const a = db.crm.actions.find((x) => x.id === id);
+        if (a)
+          Object.assign(
+            a,
+            { jour: vers.jour, heure: vers.heure },
+            vers.libelle ? { libelle: vers.libelle } : {},
+          );
+      },
+    },
     crmTaches: {
       creer: async (t: unknown) => {
         ecrire('creer', t);
@@ -623,5 +659,172 @@ describe('calendrier du CRM et Discord, dans les deux sens', () => {
     await later();
     await syncFromCrm(client);
     expect(db.spans).toHaveLength(1);
+  });
+});
+
+/** La prochaine action d'une fiche, telle que la route la donne (personnes fictives). */
+const action = (partial: Partial<CrmData['actions'][number]>): CrmData['actions'][number] => ({
+  id: 'f-camille',
+  nom: 'Camille Dubreuil',
+  cabinet: null,
+  telephone: null,
+  statut: 'a_relancer',
+  verdict: null,
+  libelle: 'Relance · Loys rappelle Camille',
+  jour: today,
+  heure: '15:00',
+  responsable: 'Loys',
+  ...partial,
+});
+
+describe('prochaine action d’une fiche, dans les deux sens', () => {
+  it('cochée sur Discord, elle est honorée dans le CRM ; décochée, elle y revient', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.actions.push(action({}));
+    await syncFromCrm(client);
+    const row = rowsOf(loys)[0]!;
+
+    await service.toggleTasks(client, loys, [row.id], 'Loys');
+    expect(db.crmLog).toEqual([
+      [
+        'fait',
+        'f-camille',
+        'Loys',
+        { jour: today, heure: '15:00', libelle: 'Relance · Loys rappelle Camille' },
+      ],
+    ]);
+    expect(row.is_done).toBe(true);
+
+    // Le CRM n'a plus d'action : la ligne cochée reste, sans ping.
+    await later();
+    await syncFromCrm(client);
+    expect(rowsOf(loys)).toEqual([expect.objectContaining({ id: row.id, is_done: true })]);
+
+    await service.toggleTasks(client, loys, [row.id], 'Loys');
+    expect(db.crmLog[1]).toEqual([
+      'a_faire',
+      'f-camille',
+      'Loys',
+      { jour: today, heure: '15:00', libelle: 'Relance · Loys rappelle Camille' },
+    ]);
+    await later();
+    await syncFromCrm(client);
+    expect(rowsOf(loys)).toEqual([expect.objectContaining({ id: row.id, is_done: false })]);
+  });
+
+  it('modifiée sur Discord, le CRM change d’heure, de jour et de texte, sans annonce ni doublon', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.actions.push(action({}));
+    await syncFromCrm(client);
+    const row = rowsOf(loys)[0]!;
+
+    // L'heure seule : le texte du CRM ne bouge pas, et les pings suivent la nouvelle heure.
+    await service.editTask(client, loys, row.id, {
+      label: 'Relance · Loys rappelle Camille',
+      date: today,
+      time: '16:00',
+    });
+    expect(db.crmLog).toEqual([['deplacer', 'f-camille', 'Loys', { jour: today, heure: '16:00' }]]);
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
+    expect(pings('salon-loys').map((p) => p.split(' · ')[0])).toEqual([
+      '⏰ <@u-loys> **16:00** (dans 1 h)',
+      '⏰ <@u-loys> **16:00** (dans 30 min)',
+      '⏰ <@u-loys> **16:00** (dans 10 min)',
+    ]);
+
+    // Le texte et le jour : le CRM les prend, la ligne passe au lendemain.
+    await service.editTask(client, loys, row.id, {
+      label: 'Envoyer le devis à Camille',
+      date: '2026-10-29',
+      time: null,
+    });
+    expect(db.crmLog[1]).toEqual([
+      'deplacer',
+      'f-camille',
+      'Loys',
+      { jour: '2026-10-29', heure: null, libelle: 'Envoyer le devis à Camille' },
+    ]);
+    sent.length = 0;
+    await later();
+    await syncFromCrm(client);
+    expect(rowsOf(loys)).toEqual([]);
+    expect(db.tasks.filter((t) => t.record_id === 'lead:f-camille' && !t.dismissed_at)).toEqual([
+      expect.objectContaining({ id: row.id, label: 'Envoyer le devis à Camille', due_time: null }),
+    ]);
+    expect(sent.filter((s) => s.content.startsWith('Agenda mis à jour'))).toEqual([]);
+  });
+
+  it('retirée sur Discord, la fiche n’a plus de prochaine action', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.actions.push(action({}));
+    await syncFromCrm(client);
+    await service.removeTasks(client, loys, [rowsOf(loys)[0]!.id]);
+    expect(db.crmLog).toEqual([
+      [
+        'retirer',
+        'f-camille',
+        'Loys',
+        { jour: today, heure: '15:00', libelle: 'Relance · Loys rappelle Camille' },
+      ],
+    ]);
+    await later();
+    await syncFromCrm(client);
+    expect(rowsOf(loys)).toEqual([]);
+  });
+
+  it('reportée le soir, elle passe au lendemain dans le CRM, à la même heure', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.actions.push(action({}));
+    await syncFromCrm(client);
+    const row = rowsOf(loys)[0]!;
+    await service.toggleCarry(client, loys, [row.id]);
+    expect(db.crmLog).toEqual([
+      ['deplacer', 'f-camille', 'Loys', { jour: '2026-10-29', heure: '15:00' }],
+    ]);
+    expect(row.signature?.endsWith('|2026-10-29')).toBe(true);
+    expect(rowsOf(loys)).toEqual([]);
+  });
+
+  it('posée sur les deux tableaux, cochée chez Loys, elle part aussitôt de celui d’Enzo', async () => {
+    const loys = published('Loys');
+    const enzo = published('Enzo');
+    db.crm.actions.push(action({ libelle: 'R1 avec Camille', statut: 'r1', responsable: null }));
+    await syncFromCrm(client);
+    expect(rowsOf(loys).map((t) => t.record_id)).toEqual(['lead:f-camille@loys']);
+    expect(rowsOf(enzo).map((t) => t.record_id)).toEqual(['lead:f-camille@enzo']);
+
+    await later();
+    // L'horloge avance comme en vrai : la relecture du tableau d'Enzo part
+    // après l'écriture (un aller-retour vers la base les sépare toujours).
+    let now = Date.now();
+    const horloge = vi.spyOn(Date, 'now').mockImplementation(() => ++now);
+    await service.toggleTasks(client, loys, [rowsOf(loys)[0]!.id], 'Loys');
+    horloge.mockRestore();
+    expect(db.crmLog).toEqual([
+      ['fait', 'f-camille', 'Loys', { jour: today, heure: '15:00', libelle: 'R1 avec Camille' }],
+    ]);
+    // Sans attendre la relecture des 5 minutes.
+    expect(rowsOf(enzo)).toEqual([]);
+    expect(rowsOf(loys)[0]).toMatchObject({ is_done: true, done_by: 'Loys' });
+  });
+
+  it('sans réponse du CRM, rien n’est coché ni retiré, et la personne le voit', async () => {
+    const loys = published('Loys');
+    published('Enzo');
+    db.crm.actions.push(action({}));
+    await syncFromCrm(client);
+    db.crmDown = true;
+    const row = rowsOf(loys)[0]!;
+    await expect(service.toggleTasks(client, loys, [row.id], 'Loys')).rejects.toThrow(
+      /CRM n’a pas répondu/,
+    );
+    await expect(service.removeTasks(client, loys, [row.id])).rejects.toThrow(
+      /CRM n’a pas répondu/,
+    );
+    expect(rowsOf(loys)).toEqual([expect.objectContaining({ id: row.id, is_done: false })]);
   });
 });

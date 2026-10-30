@@ -26,8 +26,12 @@ import {
  *  - `/api/pense-bete/taches` : ce qu'on fait sur Discord aux TÂCHES du
  *    calendrier (ajouter, cocher, modifier, reporter, retirer) y est écrit
  *    (Loys, 29/10 : le calendrier du CRM et Discord, le même fonctionnement,
- *    dans les deux sens). Le calendrier est la seule source des tâches. Les
- *    prochaines actions des fiches, elles, ne s'écrivent que dans le CRM.
+ *    dans les deux sens). Le calendrier est la seule source des tâches ;
+ *  - `/api/pense-bete/actions` : de même pour la PROCHAINE ACTION d'une fiche
+ *    (Loys, 30/10 : tout mis à jour en interdépendance) : cochée, elle est
+ *    honorée dans le CRM (une note, la fiche est « à planifier ») ; décochée,
+ *    elle revient ; modifiée ou reportée, elle change de jour, d'heure ou de
+ *    texte ; retirée, la fiche n'en a plus.
  *
  * Ce qui en sort :
  *  - la prochaine action de chaque fiche (`next_action_at`, `next_action_label`),
@@ -124,12 +128,13 @@ export const CRM_INJOIGNABLE =
 async function ecrire(
   method: 'POST' | 'PATCH' | 'DELETE',
   body: Record<string, unknown>,
+  route: 'taches' | 'actions' = 'taches',
 ): Promise<{ id: string } | null> {
   const secret = config.CRM_SECRET;
   if (!secret) throw new Error(CRM_INJOIGNABLE);
   let res: Response;
   try {
-    res = await fetch(`${config.CRM_URL.replace(/\/+$/, '')}/api/pense-bete/taches`, {
+    res = await fetch(`${config.CRM_URL.replace(/\/+$/, '')}/api/pense-bete/${route}`, {
       method,
       headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -173,6 +178,45 @@ export const crmTaches = {
     await ecrire('DELETE', { id });
   },
 };
+
+/** La prochaine action d'une fiche telle que Discord la montre (jour et heure de Paris). */
+export interface ActionMontree {
+  jour: string;
+  /** null : toute la journée. */
+  heure: string | null;
+  libelle: string;
+}
+
+/**
+ * La prochaine action d'une fiche, écrite depuis Discord. Même contrat que
+ * `crmTaches` : `CRM_INJOIGNABLE` en cas d'échec, et rien n'a changé.
+ * `par` : le prénom de celui qui a fait le geste (il signe la note de la fiche).
+ */
+export const crmActions = {
+  async fait(leadId: string, par: string, actuelle: ActionMontree): Promise<void> {
+    await ecrire('PATCH', { geste: 'fait', lead_id: leadId, par, actuelle }, 'actions');
+  },
+  async aFaire(leadId: string, par: string, actuelle: ActionMontree): Promise<void> {
+    await ecrire('PATCH', { geste: 'a_faire', lead_id: leadId, par, actuelle }, 'actions');
+  },
+  async retirer(leadId: string, par: string, actuelle: ActionMontree): Promise<void> {
+    await ecrire('PATCH', { geste: 'retirer', lead_id: leadId, par, actuelle }, 'actions');
+  },
+  /** `libelle` absent : le texte du CRM ne change pas. */
+  async deplacer(
+    leadId: string,
+    par: string,
+    vers: { jour: string; heure: string | null; libelle?: string },
+  ): Promise<void> {
+    await ecrire('PATCH', { geste: 'deplacer', lead_id: leadId, par, ...vers }, 'actions');
+  },
+};
+
+/** La fiche derrière une tâche du tableau (sa prochaine action), ou null. */
+export function crmLeadId(recordId: string | null | undefined): string | null {
+  const base = recordId?.split('@')[0] ?? '';
+  return base.startsWith(LEAD) ? base.slice(LEAD.length) : null;
+}
 
 /** L'identifiant de la tâche du CRM derrière une tâche du tableau, ou null (action d'une fiche, tâche d'avant). */
 export function crmTacheId(recordId: string | null | undefined): string | null {
